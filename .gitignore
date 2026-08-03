@@ -7,4 +7,5 @@ venv/
 .pytest_cache/
 .DS_Store
 .cursor/
-.docs/
+docs/HISTORY.md
+docs/SPECS.md
