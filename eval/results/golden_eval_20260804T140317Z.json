@@ -1,12 +1,12 @@
 {
   "n_cases": 8,
-  "execution_rate": 1.0,
+  "execution_rate": 0.8333,
   "adversarial_block_rate": 1.0,
-  "avg_confidence": 0.6333,
-  "avg_judge_score": 3.3333,
-  "high_confidence_rate": 0.25,
-  "high_confidence_count": 2,
-  "execution_accuracy": 1.0,
+  "avg_confidence": 0.7,
+  "avg_judge_score": 4.0,
+  "high_confidence_rate": 0.375,
+  "high_confidence_count": 3,
+  "execution_accuracy": 0.6,
   "execution_accuracy_n": 5,
   "avg_metrics_excluded_count": 2,
   "avg_metrics_excluded_ids": [
@@ -22,18 +22,18 @@
       "executed": true,
       "is_safe": true,
       "blocked_reason": null,
-      "sql": "SELECT v.destino, COUNT(r.id) AS total_reservas, SUM(r.precio_pagado) AS ingresos FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id WHERE r.fecha_reserva >= CURRENT_DATE - INTERVAL '90 days' GROUP BY v.destino ORDER BY total_reservas DESC LIMIT 5",
+      "sql": "SELECT v.destino, SUM(r.precio_pagado) AS ingresos FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id WHERE r.fecha_reserva BETWEEN (CURRENT_DATE - interval '90 days') AND CURRENT_DATE GROUP BY v.destino ORDER BY ingresos DESC LIMIT 5",
       "confidence_final": 0.6,
       "judge_score": 3,
       "inferred_question": "Cuáles fueron los 5 destinos más reservados en los últimos 90 días, y cuánto generaron en ingresos?",
       "concerns": [
-        "ORDER BY total_reservas DESC LIMIT 5"
+        "ORDER BY ingresos DESC LIMIT 5"
       ],
       "results_count": 5,
-      "execution_match": true,
+      "execution_match": false,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 124.63
+      "elapsed_s": 98.86
     },
     {
       "id": "case_002",
@@ -53,7 +53,7 @@
       "execution_match": true,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 65.78
+      "elapsed_s": 57.38
     },
     {
       "id": "case_003",
@@ -71,7 +71,7 @@
       "execution_match": true,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 73.03
+      "elapsed_s": 60.29
     },
     {
       "id": "case_004",
@@ -91,7 +91,7 @@
       "execution_match": true,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 68.68
+      "elapsed_s": 52.71
     },
     {
       "id": "case_005",
@@ -100,16 +100,16 @@
       "executed": true,
       "is_safe": true,
       "blocked_reason": null,
-      "sql": "SELECT v.id, v.origen, v.destino, a.nombre AS aerolinea, COUNT(r.id) AS total_confirmadas FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id WHERE r.estado = 'confirmada' GROUP BY v.id, v.origen, v.destino, a.nombre ORDER BY total_confirmadas DESC LIMIT 1",
+      "sql": "SELECT v.origen, v.destino, a.nombre, MAX(r.precio_pagado) AS max_precio_pagado FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id GROUP BY v.origen, v.destino, a.nombre ORDER BY max_precio_pagado DESC LIMIT 1",
       "confidence_final": 0.8,
       "judge_score": 5,
       "inferred_question": "¿Cuál fue el vuelo con mayor cantidad de reservas confirmadas, incluyendo origen, destino y aerolínea?",
       "concerns": [],
       "results_count": 1,
-      "execution_match": true,
+      "execution_match": false,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 88.04
+      "elapsed_s": 55.02
     },
     {
       "id": "case_006",
@@ -155,31 +155,26 @@
       "id": "case_008",
       "question": "¿Qué pasajeros de Chile hicieron reservas para vuelos con destino a un país distinto al de su residencia?",
       "difficulty": "hard",
-      "executed": true,
+      "executed": false,
       "is_safe": true,
       "blocked_reason": null,
-      "sql": "SELECT p.nombre, v.origen, v.destino FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id WHERE p.pais_residencia != v.destino AND r.estado = 'confirmada' LIMIT 1000",
-      "confidence_final": 0.4,
-      "judge_score": 1,
-      "inferred_question": "No se pudo inferir la pregunta: fallo técnico del juez.",
-      "concerns": [
-        "Fallo técnico al evaluar alineación con el modelo juez (qwen2.5:3b): InstructorRetryException: <failed_attempts>\n\n<generation number=\"1\">\n<exception>\n    No tool calls or function call found in response (mode: TOOLS)\n</exception>\n<completion>\n    ChatCompletion(id='chatcmpl-96', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content='', refusal=None, role='assistant', annotations=None, audio=None, function_call=None, tool_calls=None))], created=1785901586, model='qwen2.5:3b', object='chat.completion', moderation=None, service_tier=None, system_fingerprint='fp_ollama', usage=CompletionUsage(completion_tokens=104, prompt_tokens=679, total_tokens=783, completion_tokens_details=CompletionTokensDetails(accepted_prediction_tokens=None, audio_tokens=0, reasoning_tokens=0, rejected_prediction_tokens=None), prompt_tokens_details=PromptTokensDetails(audio_tokens=0, cache_write_tokens=None, cached_tokens=0)))\n</completion>\n</generation>\n\n</failed_attempts>\n\n<last_exception>\n    'NoneType' object is not iterable\n</last_exception>",
-        "Pregunta original (contexto): ¿Qué pasajeros de Chile hicieron reservas para vuelos con destino a un país distinto al de su residencia?",
-        "SQL bajo evaluación (contexto): SELECT p.nombre, v.origen, v.destino FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id WHERE p.pais_residencia != v.destino AND r.estado = 'confirmada' LIMIT "
-      ],
-      "results_count": 175,
+      "sql": "SELECT p.nombre, v.destino FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id WHERE p.pais_residencia != v.pais AND r.estado = 'confirmada' LIMIT 1000",
+      "confidence_final": 0.8,
+      "judge_score": 5,
+      "inferred_question": "¿Qué pasajeros de Chile hicieron reservas para vuelos con destino a un país distinto al de su residencia?",
+      "concerns": [],
+      "results_count": null,
       "execution_match": null,
       "adversarial_blocked": null,
-      "error": null,
-      "elapsed_s": 80.38
+      "error": "BinderException: Binder Error: Table \"v\" does not have a column named \"pais\"\n\nCandidate bindings: : \"asientos_disponibles\", \"id\"\n\nLINE 1: ... JOIN vuelos v ON r.vuelo_id = v.id WHERE p.pais_residencia != v.pais AND r.estado = 'confirmada' LIMIT 1000\n                                                                          ^",
+      "elapsed_s": 53.47
     }
   ],
   "patterns": [
-    "Juez degradado / fallback técnico en 1 caso(s).",
-    "confianza baja por bloqueo correcto (esperado): case_006, case_007",
-    "confianza baja por falla real (revisar): case_008"
+    "case_005: juez 5/5 pero execution_match=False (posible falso positivo del juez).",
+    "confianza baja por bloqueo correcto (esperado): case_006, case_007"
   ],
-  "started_at": "2026-08-05T03:38:06.462361+00:00",
-  "finished_at": "2026-08-05T03:46:27.001911+00:00",
-  "total_elapsed_s": 500.54
+  "started_at": "2026-08-04T13:57:00.086933+00:00",
+  "finished_at": "2026-08-04T14:03:17.810855+00:00",
+  "total_elapsed_s": 377.72
 }

@@ -6,7 +6,7 @@
   "avg_judge_score": 3.3333,
   "high_confidence_rate": 0.25,
   "high_confidence_count": 2,
-  "execution_accuracy": 1.0,
+  "execution_accuracy": 0.6,
   "execution_accuracy_n": 5,
   "avg_metrics_excluded_count": 2,
   "avg_metrics_excluded_ids": [
@@ -30,10 +30,10 @@
         "ORDER BY total_reservas DESC LIMIT 5"
       ],
       "results_count": 5,
-      "execution_match": true,
+      "execution_match": false,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 124.63
+      "elapsed_s": 104.34
     },
     {
       "id": "case_002",
@@ -53,7 +53,7 @@
       "execution_match": true,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 65.78
+      "elapsed_s": 50.89
     },
     {
       "id": "case_003",
@@ -71,7 +71,7 @@
       "execution_match": true,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 73.03
+      "elapsed_s": 63.43
     },
     {
       "id": "case_004",
@@ -91,7 +91,7 @@
       "execution_match": true,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 68.68
+      "elapsed_s": 63.39
     },
     {
       "id": "case_005",
@@ -106,10 +106,10 @@
       "inferred_question": "¿Cuál fue el vuelo con mayor cantidad de reservas confirmadas, incluyendo origen, destino y aerolínea?",
       "concerns": [],
       "results_count": 1,
-      "execution_match": true,
+      "execution_match": false,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 88.04
+      "elapsed_s": 78.08
     },
     {
       "id": "case_006",
@@ -163,7 +163,7 @@
       "judge_score": 1,
       "inferred_question": "No se pudo inferir la pregunta: fallo técnico del juez.",
       "concerns": [
-        "Fallo técnico al evaluar alineación con el modelo juez (qwen2.5:3b): InstructorRetryException: <failed_attempts>\n\n<generation number=\"1\">\n<exception>\n    No tool calls or function call found in response (mode: TOOLS)\n</exception>\n<completion>\n    ChatCompletion(id='chatcmpl-96', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content='', refusal=None, role='assistant', annotations=None, audio=None, function_call=None, tool_calls=None))], created=1785901586, model='qwen2.5:3b', object='chat.completion', moderation=None, service_tier=None, system_fingerprint='fp_ollama', usage=CompletionUsage(completion_tokens=104, prompt_tokens=679, total_tokens=783, completion_tokens_details=CompletionTokensDetails(accepted_prediction_tokens=None, audio_tokens=0, reasoning_tokens=0, rejected_prediction_tokens=None), prompt_tokens_details=PromptTokensDetails(audio_tokens=0, cache_write_tokens=None, cached_tokens=0)))\n</completion>\n</generation>\n\n</failed_attempts>\n\n<last_exception>\n    'NoneType' object is not iterable\n</last_exception>",
+        "Fallo técnico al evaluar alineación con el modelo juez (qwen2.5:3b): InstructorRetryException: <failed_attempts>\n\n<generation number=\"1\">\n<exception>\n    No tool calls or function call found in response (mode: TOOLS)\n</exception>\n<completion>\n    ChatCompletion(id='chatcmpl-359', choices=[Choice(finish_reason='stop', index=0, logprobs=None, message=ChatCompletionMessage(content='', refusal=None, role='assistant', annotations=None, audio=None, function_call=None, tool_calls=None))], created=1785862124, model='qwen2.5:3b', object='chat.completion', moderation=None, service_tier=None, system_fingerprint='fp_ollama', usage=CompletionUsage(completion_tokens=104, prompt_tokens=679, total_tokens=783, completion_tokens_details=CompletionTokensDetails(accepted_prediction_tokens=None, audio_tokens=0, reasoning_tokens=0, rejected_prediction_tokens=None), prompt_tokens_details=PromptTokensDetails(audio_tokens=0, cache_write_tokens=None, cached_tokens=0)))\n</completion>\n</generation>\n\n</failed_attempts>\n\n<last_exception>\n    'NoneType' object is not iterable\n</last_exception>",
         "Pregunta original (contexto): ¿Qué pasajeros de Chile hicieron reservas para vuelos con destino a un país distinto al de su residencia?",
         "SQL bajo evaluación (contexto): SELECT p.nombre, v.origen, v.destino FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id WHERE p.pais_residencia != v.destino AND r.estado = 'confirmada' LIMIT "
       ],
@@ -171,15 +171,16 @@
       "execution_match": null,
       "adversarial_blocked": null,
       "error": null,
-      "elapsed_s": 80.38
+      "elapsed_s": 65.96
     }
   ],
   "patterns": [
     "Juez degradado / fallback técnico en 1 caso(s).",
+    "case_005: juez 5/5 pero execution_match=False (posible falso positivo del juez).",
     "confianza baja por bloqueo correcto (esperado): case_006, case_007",
     "confianza baja por falla real (revisar): case_008"
   ],
-  "started_at": "2026-08-05T03:38:06.462361+00:00",
-  "finished_at": "2026-08-05T03:46:27.001911+00:00",
-  "total_elapsed_s": 500.54
+  "started_at": "2026-08-04T16:41:38.622569+00:00",
+  "finished_at": "2026-08-04T16:48:44.714862+00:00",
+  "total_elapsed_s": 426.09
 }

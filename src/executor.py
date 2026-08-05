@@ -7,6 +7,7 @@ Ejecución segura de SQL en DuckDB (solo lectura). Ver SPECS.md §7.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,15 +18,23 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_DB = "data/vuelos.duckdb"
 
 
+@dataclass
+class ExecutionResult:
+    """Resultado de ejecución: filas y error tipado (si hubo)."""
+
+    rows: list[dict]
+    error: str | None = None
+
+
 def execute_query(
     sql: str,
     db_path: str | None = None,
-) -> list[dict]:
+) -> ExecutionResult:
     """
     Ejecuta `sql` en DuckDB en modo solo-lectura.
 
-    Si la query falla o la conexión no está disponible, retorna lista vacía
-    (no propaga la excepción al orquestador).
+    Ante fallo de DuckDB/conexión, devuelve rows=[] y `error` con el
+    detalle (no traga la excepción en silencio).
     """
     path = _resolve_db_path(db_path)
     try:
@@ -36,14 +45,22 @@ def execute_query(
             # pero documenta la intención de no persistir cambios.
             con.execute("BEGIN TRANSACTION")
             cursor = con.execute(sql)
-            columns = [col[0] for col in cursor.description] if cursor.description else []
+            columns = (
+                [col[0] for col in cursor.description] if cursor.description else []
+            )
             rows = cursor.fetchall()
             con.execute("ROLLBACK")
-            return [_row_to_dict(columns, row) for row in rows]
+            return ExecutionResult(
+                rows=[_row_to_dict(columns, row) for row in rows],
+                error=None,
+            )
         finally:
             con.close()
-    except Exception:
-        return []
+    except Exception as exc:
+        return ExecutionResult(
+            rows=[],
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def list_schema_tables(db_path: str | None = None) -> list[str]:

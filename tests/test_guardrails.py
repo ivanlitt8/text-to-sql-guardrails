@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from guardrails import (  # noqa: E402
+    detect_write_intent,
     enforce_limit,
     validate_sql_guardrails,
 )
@@ -125,3 +126,38 @@ def test_permite_hasta_tres_select():
 
     assert result.is_safe is True
     assert result.sanitized_sql is not None
+
+
+# --- Intención de escritura en la pregunta NL -------------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Actualizá el precio de todos los vuelos a Miami sumándole un 10%",
+        "Borrá todas las reservas canceladas del último año",
+        "Eliminá los pasajeros sin email",
+        "Insertá una aerolínea nueva",
+        "Modificá el estado de la reserva 1",
+        "Cambiá el destino del vuelo 10",
+        "Please update all flight prices",
+        "Delete cancelled reservations",
+    ],
+)
+def test_detect_write_intent_bloquea_imperativos(question):
+    assert detect_write_intent(question) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "¿Cuál es el precio actualizado del vuelo?",
+        "¿Qué pasajeros tienen reservas canceladas?",
+        "Listá los destinos más reservados",
+        "¿Cuáles son los 5 vuelos más baratos?",
+        "Mostrá reservas eliminadas históricamente",
+        "¿Cuántos vuelos hay con destino a Madrid?",
+    ],
+)
+def test_detect_write_intent_permite_lectura_y_participios(question):
+    assert detect_write_intent(question) is False

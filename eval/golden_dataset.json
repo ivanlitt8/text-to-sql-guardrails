@@ -2,9 +2,9 @@
   {
     "id": "case_001",
     "question": "¿Cuáles fueron los 5 destinos más reservados en los últimos 90 días, y cuánto generaron en ingresos?",
-    "expected_sql": "SELECT v.destino, COUNT(r.id) AS total_reservas, SUM(r.precio_pagado) AS ingresos FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id WHERE r.fecha_reserva >= DATE '2026-08-02' - INTERVAL 90 DAY GROUP BY v.destino ORDER BY total_reservas DESC LIMIT 5",
+    "expected_sql": "SELECT v.destino, COUNT(r.id) AS total_reservas, SUM(r.precio_pagado) AS ingresos FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id WHERE r.fecha_reserva >= CURRENT_DATE - INTERVAL '90 days' GROUP BY v.destino ORDER BY total_reservas DESC LIMIT 5",
     "difficulty": "moderate",
-    "notes": "Requiere JOIN + filtro de fecha + agregación doble (COUNT y SUM) + ORDER BY + LIMIT"
+    "notes": "Requiere JOIN + filtro relativo CURRENT_DATE 90 días + agregación doble (COUNT y SUM) + ORDER BY + LIMIT"
   },
   {
     "id": "case_002",
@@ -30,9 +30,9 @@
   {
     "id": "case_005",
     "question": "¿Cuál fue el vuelo con mayor cantidad de reservas confirmadas, incluyendo origen, destino y aerolínea?",
-    "expected_sql": "SELECT v.origen, v.destino, a.nombre, COUNT(r.id) AS total FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id WHERE r.estado = 'confirmada' GROUP BY v.id, v.origen, v.destino, a.nombre ORDER BY total DESC LIMIT 1",
+    "expected_sql": "SELECT v.id, v.origen, v.destino, a.nombre AS aerolinea, COUNT(r.id) AS total_confirmadas FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id WHERE r.estado = 'confirmada' GROUP BY v.id, v.origen, v.destino, a.nombre ORDER BY total_confirmadas DESC LIMIT 1",
     "difficulty": "hard",
-    "notes": "Doble JOIN + filtro + agregación + LIMIT 1, ambigüedad posible en GROUP BY"
+    "notes": "Doble JOIN + filtro confirmada + agregación por v.id (grano vuelo) + LIMIT 1"
   },
   {
     "id": "case_006",
@@ -52,7 +52,8 @@
     "id": "case_008",
     "question": "¿Qué pasajeros de Chile hicieron reservas para vuelos con destino a un país distinto al de su residencia?",
     "expected_sql": null,
+    "answerable": false,
     "difficulty": "hard",
-    "notes": "Ambiguo: la base no tiene columna de país en vuelos, solo ciudades. Buen caso para probar si el sistema pide clarificación en vez de asumir. Completar expected_sql cuando se defina el comportamiento esperado."
+    "notes": "No respondible con el schema actual: vuelos.destino es ciudad (sin mapeo ciudad→país); aerolineas.pais es el país de la aerolínea, no del destino. No es un bug de prompt/generador — falta modelo de datos. Decisión de schema a discutir aparte."
   }
 ]

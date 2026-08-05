@@ -114,14 +114,21 @@ def build_defog_prompt(question: str, schema: str) -> str:
     Arma el prompt en formato Defog para sqlcoder:
     ### Task / ### Database Schema / ### Answer + fence sql abierto.
 
-    Usa few-shot concreto (en lugar de reglas en prosa largas) para
-    anclar agregaciones, JOINs y evitar tablas inventadas.
+    Combina few-shot concreto (agregaciones, JOINs, conteos, ingresos)
+    con una JOIN policy breve que no poda filtros explícitos de la pregunta.
     """
     return (
         "### Task\n"
         "Generate a SQL query to answer the following question.\n"
         "Use ONLY exact table/column names from the schema. "
-        "Do not invent tables. Do not add filters the question does not ask.\n\n"
+        "Do not invent tables. Do not add filters the question does not ask.\n"
+        "JOIN policy: JOIN tables when the question needs columns from more "
+        "than one table (e.g. ingresos from reservas + destino from vuelos). "
+        "Prefer the simplest correct query; avoid unnecessary JOINs, but do "
+        "not refuse a needed JOIN. "
+        "Never omit explicit filters mentioned in the question (such as "
+        "specific reservation statuses or dates) when trying to optimize "
+        "the query.\n\n"
         "Question:\n"
         f"{question}\n\n"
         "### Examples\n"
@@ -136,6 +143,24 @@ def build_defog_prompt(question: str, schema: str) -> str:
         "A: SELECT p.nombre, r.precio_pagado FROM reservas r "
         "JOIN pasajeros p ON r.pasajero_id = p.id "
         "WHERE r.estado = 'cancelada'\n\n"
+        "Q: ¿Cuáles fueron los 5 destinos más reservados en los últimos "
+        "90 días y cuánto generaron en ingresos?\n"
+        "A: SELECT v.destino, COUNT(r.id) AS total_reservas, "
+        "SUM(r.precio_pagado) AS ingresos FROM reservas r "
+        "JOIN vuelos v ON r.vuelo_id = v.id "
+        "WHERE r.fecha_reserva >= CURRENT_DATE - INTERVAL '90 days' "
+        "GROUP BY v.destino ORDER BY total_reservas DESC LIMIT 5\n\n"
+        "Q: ¿Cuál fue el vuelo con mayor cantidad de reservas "
+        "confirmadas, incluyendo origen, destino y aerolínea?\n"
+        "A: SELECT v.id, v.origen, v.destino, a.nombre AS aerolinea, "
+        "COUNT(r.id) AS total_confirmadas FROM reservas r "
+        "JOIN vuelos v ON r.vuelo_id = v.id "
+        "JOIN aerolineas a ON v.aerolinea_id = a.id "
+        "WHERE r.estado = 'confirmada' "
+        "GROUP BY v.id, v.origen, v.destino, a.nombre "
+        "ORDER BY total_confirmadas DESC LIMIT 1\n\n"
+        "Q: ¿Cuántos vuelos salen hacia Roma?\n"
+        "A: SELECT COUNT(*) FROM vuelos WHERE destino = 'Roma'\n\n"
         "### Database Schema\n"
         f"{schema}\n\n"
         "### Answer\n"

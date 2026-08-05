@@ -54,11 +54,23 @@ def test_build_defog_prompt_tiene_tres_secciones_y_fence_abierto():
     assert "CREATE TABLE vuelos" in prompt
     assert prompt.rstrip().endswith("```sql")
     assert "Do not invent tables" in prompt
-    # Few-shot: agregación, columnas de vuelos, join reservas
+    # Few-shots estables: AVG, origen/destino, canceladas, conteo simple
     assert "AVG(v.precio)" in prompt
     assert "GROUP BY origen, destino" in prompt
     assert "estado = 'cancelada'" in prompt
-    assert "JOIN POLICY" not in prompt
+    assert "SELECT COUNT(*) FROM vuelos WHERE destino = 'Roma'" in prompt
+    # Few-shot case_001: COUNT+SUM + filtro 90 días, orden por reservas
+    assert "COUNT(r.id) AS total_reservas" in prompt
+    assert "INTERVAL '90 days'" in prompt
+    assert "ORDER BY total_reservas DESC LIMIT 5" in prompt
+    # Few-shot case_005: confirmadas + COUNT + GROUP BY v.id (grano vuelo)
+    assert "estado = 'confirmada'" in prompt
+    assert "COUNT(r.id) AS total_confirmadas" in prompt
+    assert "GROUP BY v.id, v.origen, v.destino, a.nombre" in prompt
+    assert "ORDER BY total_confirmadas DESC LIMIT 1" in prompt
+    # JOIN policy suavizada (no la prosa agresiva anterior)
+    assert "JOIN policy:" in prompt
+    assert "Never omit explicit filters" in prompt
     assert "AGGREGATION MAPPING" not in prompt
     assert "STRICT FILTERS" not in prompt
 

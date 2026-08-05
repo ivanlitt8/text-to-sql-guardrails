@@ -26,6 +26,20 @@ BLOCKED_KEYWORDS = [
     "GRANT",
 ]
 
+# Imperativos / infinitivos de escritura en la pregunta (no en el SQL).
+# No matchea participios tipo "actualizado", "eliminadas", "borrado".
+_WRITE_INTENT_RE = re.compile(
+    r"(?i)\b("
+    r"actualiz[áa]|actualizar|actualicen|"
+    r"modific[áa]|modificar|modifiquen|"
+    r"borr[áa]|borrar|borren|"
+    r"elimin[áa]|eliminar|eliminen|"
+    r"insert[áa]|insertar|inserten|"
+    r"cambi[áa]|cambiar|cambien|"
+    r"update|delete|insert|drop|truncate"
+    r")\b"
+)
+
 # v1: más de 3 SELECT → rechazo (SPECS §7, conteo simple de keywords).
 _MAX_SELECT_KEYWORDS = 3
 
@@ -91,6 +105,20 @@ class GuardrailResult(BaseModel):
     blocked_reason: str | None
     query_type: str
     sanitized_sql: str | None = None
+
+
+def detect_write_intent(question: str) -> bool:
+    """
+    Detecta intención de escritura/modificación en la pregunta en
+    lenguaje natural (antes de generar SQL).
+
+    True para imperativos/infinitivos ("Actualizá el precio", "borrá…").
+    False para participios/adjetivos ("precio actualizado", "reservas
+    canceladas/eliminadas") que no piden mutar datos.
+    """
+    if not question or not question.strip():
+        return False
+    return _WRITE_INTENT_RE.search(question) is not None
 
 
 def validate_sql_guardrails(
