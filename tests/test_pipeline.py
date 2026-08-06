@@ -36,8 +36,10 @@ def _generation(**overrides) -> SQLGenerationResult:
 def _verdict(**overrides) -> JudgeVerdict:
     data = {
         "inferred_question": "¿Cuáles son los 5 vuelos más baratos?",
+        "reasoning": "SQL lista destinos ordenados por precio; alineado.",
         "alignment_score": 4,
         "concerns": [],
+        "is_degraded": False,
     }
     data.update(overrides)
     return JudgeVerdict(**data)

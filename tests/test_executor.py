@@ -46,4 +46,10 @@ def test_execute_query_columna_inexistente_propaga_error():
 
 def test_list_schema_tables():
     tables = list_schema_tables(str(ROOT / "data" / "vuelos.duckdb"))
-    assert set(tables) == {"aerolineas", "vuelos", "pasajeros", "reservas"}
+    assert set(tables) == {
+        "aerolineas",
+        "ciudades",
+        "vuelos",
+        "pasajeros",
+        "reservas",
+    }

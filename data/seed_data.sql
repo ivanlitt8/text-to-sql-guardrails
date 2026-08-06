@@ -8,6 +8,18 @@ INSERT INTO aerolineas VALUES (3, 'Iberia', 'España');
 INSERT INTO aerolineas VALUES (4, 'American Airlines', 'Estados Unidos');
 INSERT INTO aerolineas VALUES (5, 'Flybondi', 'Argentina');
 
+-- Ciudades
+INSERT INTO ciudades VALUES ('Buenos Aires', 'Argentina');
+INSERT INTO ciudades VALUES ('Cordoba', 'Argentina');
+INSERT INTO ciudades VALUES ('Bariloche', 'Argentina');
+INSERT INTO ciudades VALUES ('Mendoza', 'Argentina');
+INSERT INTO ciudades VALUES ('Madrid', 'España');
+INSERT INTO ciudades VALUES ('Barcelona', 'España');
+INSERT INTO ciudades VALUES ('Miami', 'Estados Unidos');
+INSERT INTO ciudades VALUES ('Nueva York', 'Estados Unidos');
+INSERT INTO ciudades VALUES ('San Pablo', 'Brasil');
+INSERT INTO ciudades VALUES ('Santiago de Chile', 'Chile');
+
 -- Vuelos
 INSERT INTO vuelos VALUES (1, 1, 'Buenos Aires', 'Madrid', '2026-05-19', 273, 236.28, 26);
 INSERT INTO vuelos VALUES (2, 5, 'Cordoba', 'San Pablo', '2026-01-30', 75, 184.94, 59);

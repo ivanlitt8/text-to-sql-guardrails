@@ -29,7 +29,7 @@ def con():
 def test_extract_schema_contiene_tablas_y_columnas(con):
     ddl = extract_schema(con)
 
-    for tabla in ("aerolineas", "vuelos", "pasajeros", "reservas"):
+    for tabla in ("aerolineas", "ciudades", "vuelos", "pasajeros", "reservas"):
         assert f"CREATE TABLE {tabla}" in ddl
 
     assert "destino" in ddl

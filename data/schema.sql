@@ -8,6 +8,11 @@ CREATE TABLE aerolineas (
     pais VARCHAR NOT NULL
 );
 
+CREATE TABLE ciudades (
+    ciudad VARCHAR PRIMARY KEY,
+    pais VARCHAR NOT NULL
+);
+
 CREATE TABLE vuelos (
     id INTEGER PRIMARY KEY,
     aerolinea_id INTEGER NOT NULL REFERENCES aerolineas(id),

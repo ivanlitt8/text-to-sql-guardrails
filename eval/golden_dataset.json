@@ -51,9 +51,9 @@
   {
     "id": "case_008",
     "question": "¿Qué pasajeros de Chile hicieron reservas para vuelos con destino a un país distinto al de su residencia?",
-    "expected_sql": null,
-    "answerable": false,
+    "expected_sql": "SELECT DISTINCT p.nombre FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id JOIN ciudades c ON v.destino = c.ciudad WHERE p.pais_residencia = 'Chile' AND c.pais != p.pais_residencia AND r.estado = 'confirmada' ORDER BY p.nombre",
+    "answerable": true,
     "difficulty": "hard",
-    "notes": "No respondible con el schema actual: vuelos.destino es ciudad (sin mapeo ciudad→país); aerolineas.pais es el país de la aerolínea, no del destino. No es un bug de prompt/generador — falta modelo de datos. Decisión de schema a discutir aparte."
+    "notes": "JOIN a ciudades para país del destino; filtrar Chile + destino en otro país + reservas confirmadas. No usar aerolineas.pais (es país de la aerolínea)."
   }
 ]

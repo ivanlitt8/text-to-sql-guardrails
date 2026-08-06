@@ -68,6 +68,9 @@ def test_build_defog_prompt_tiene_tres_secciones_y_fence_abierto():
     assert "COUNT(r.id) AS total_confirmadas" in prompt
     assert "GROUP BY v.id, v.origen, v.destino, a.nombre" in prompt
     assert "ORDER BY total_confirmadas DESC LIMIT 1" in prompt
+    # Few-shot case_008: país de destino vía JOIN ciudades
+    assert "JOIN ciudades c ON v.destino = c.ciudad" in prompt
+    assert "c.pais != p.pais_residencia" in prompt
     # JOIN policy suavizada (no la prosa agresiva anterior)
     assert "JOIN policy:" in prompt
     assert "Never omit explicit filters" in prompt

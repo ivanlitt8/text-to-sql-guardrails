@@ -22,11 +22,11 @@ def con():
 
 def test_tablas_existen(con):
     tablas = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
-    assert tablas == {"aerolineas", "vuelos", "pasajeros", "reservas"}
+    assert tablas == {"aerolineas", "ciudades", "vuelos", "pasajeros", "reservas"}
 
 
 def test_hay_datos_cargados(con):
-    for tabla in ["aerolineas", "vuelos", "pasajeros", "reservas"]:
+    for tabla in ["aerolineas", "ciudades", "vuelos", "pasajeros", "reservas"]:
         count = con.execute(f"SELECT COUNT(*) FROM {tabla}").fetchone()[0]
         assert count > 0, f"La tabla {tabla} está vacía"
 

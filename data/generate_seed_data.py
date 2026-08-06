@@ -27,6 +27,20 @@ CIUDADES = [
     "Miami", "San Pablo", "Santiago de Chile", "Barcelona", "Nueva York",
 ]
 
+# País de cada ciudad (alineado a pais_residencia / aerolineas.pais).
+CIUDAD_PAIS = {
+    "Buenos Aires": "Argentina",
+    "Cordoba": "Argentina",
+    "Bariloche": "Argentina",
+    "Mendoza": "Argentina",
+    "Madrid": "España",
+    "Barcelona": "España",
+    "Miami": "Estados Unidos",
+    "Nueva York": "Estados Unidos",
+    "San Pablo": "Brasil",
+    "Santiago de Chile": "Chile",
+}
+
 PAISES_PASAJERO = [
     "Argentina", "Chile", "España", "Estados Unidos", "Brasil", "Uruguay",
 ]
@@ -58,6 +72,15 @@ lines.append("-- Aerolíneas")
 for id_, nombre, pais in AEROLINEAS:
     lines.append(
         f"INSERT INTO aerolineas VALUES ({id_}, {sql_str(nombre)}, {sql_str(pais)});"
+    )
+lines.append("")
+
+# Ciudades (mapeo ciudad → país para JOINs con destino/origen)
+lines.append("-- Ciudades")
+for ciudad in CIUDADES:
+    pais = CIUDAD_PAIS[ciudad]
+    lines.append(
+        f"INSERT INTO ciudades VALUES ({sql_str(ciudad)}, {sql_str(pais)});"
     )
 lines.append("")
 

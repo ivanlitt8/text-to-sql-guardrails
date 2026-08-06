@@ -18,7 +18,7 @@ from guardrails import (  # noqa: E402
     validate_sql_guardrails,
 )
 
-SCHEMA_TABLES = ["aerolineas", "vuelos", "pasajeros", "reservas"]
+SCHEMA_TABLES = ["aerolineas", "ciudades", "vuelos", "pasajeros", "reservas"]
 
 
 def test_select_valido_es_seguro():

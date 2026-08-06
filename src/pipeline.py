@@ -127,10 +127,15 @@ def _response_write_intent_blocked(question: str) -> FinalResponse:
         inferred_question=(
             "No evaluable: la pregunta pide modificar datos y fue bloqueada."
         ),
+        reasoning=(
+            "Pipeline abortado por intención de escritura; no hay SQL "
+            "que evaluar."
+        ),
         alignment_score=1,
         concerns=[
             "Pipeline abortado antes del generador por intención de escritura."
         ],
+        is_degraded=False,
     )
     return FinalResponse(
         question=question,
@@ -157,8 +162,10 @@ def _response_generation_failed(
     )
     verdict = JudgeVerdict(
         inferred_question="No evaluable: el generador no produjo SQL.",
+        reasoning="Generación fallida; no hay SQL que el juez pueda evaluar.",
         alignment_score=1,
         concerns=[f"Pipeline detenido antes del juez: {exc}"],
+        is_degraded=False,
     )
     return FinalResponse(
         question=question,

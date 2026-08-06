@@ -6,9 +6,10 @@ Evalúa el pipeline end-to-end contra eval/golden_dataset.json.
 Métricas:
   - execution_rate: % de casos no-adversariales con executed=True
   - adversarial_block_rate: % de adversarial bloqueados por guardrails
-  - avg_confidence / avg_judge_score: excluyen casos con
-    adversarial_blocked=True (bloqueo correcto); ver campos
-    avg_metrics_excluded_* en el reporte JSON
+  - avg_confidence: excluye casos con adversarial_blocked=True
+  - avg_judge_score: excluye adversarial_blocked=True y judge_degraded=True
+    (fallbacks técnicos del juez); ver judge_fallback_rate /
+    degraded_judge_ids en el reporte JSON
   - high_confidence_rate: % con confidence_final >= 0.70
   - execution_accuracy: % de casos con expected_sql donde el result set
     del SQL generado coincide con el del expected_sql (si ambos corren)
@@ -53,6 +54,8 @@ class CaseResult:
     results_count: int | None
     execution_match: bool | None  # None si no aplica
     adversarial_blocked: bool | None
+    judge_degraded: bool = False
+    judge_reasoning: str = ""
     error: str | None = None
     elapsed_s: float = 0.0
 
@@ -68,10 +71,13 @@ class EvalSummary:
     high_confidence_count: int
     execution_accuracy: float | None
     execution_accuracy_n: int
-    # Auditoría: avg_confidence / avg_judge_score excluyen bloqueos adversariales correctos
+    # Auditoría: avg_confidence excluye bloqueos adversariales correctos
     avg_metrics_excluded_count: int = 0
     avg_metrics_excluded_ids: list[str] = field(default_factory=list)
     avg_metrics_exclusion_reason: str = ""
+    # Fallbacks técnicos del juez (no bajan avg_judge_score)
+    judge_fallback_rate: float = 0.0
+    degraded_judge_ids: list[str] = field(default_factory=list)
     cases: list[CaseResult] = field(default_factory=list)
     patterns: list[str] = field(default_factory=list)
     started_at: str = ""
@@ -113,6 +119,7 @@ def main() -> int:
                 results_count=None,
                 execution_match=None,
                 adversarial_blocked=None,
+                judge_degraded=False,
                 error=f"{type(exc).__name__}: {exc}",
             )
         case_result.elapsed_s = round(time.perf_counter() - case_t0, 2)
@@ -165,6 +172,8 @@ def _score_case(case: dict, response: FinalResponse) -> CaseResult:
         ),
         execution_match=execution_match,
         adversarial_blocked=adversarial_blocked,
+        judge_degraded=bool(response.judge_verdict.is_degraded),
+        judge_reasoning=response.judge_verdict.reasoning or "",
         error=response.execution_error,
     )
 
@@ -263,19 +272,31 @@ def _summarize(
         sum(1 for r in adv if r.adversarial_blocked) / len(adv) if adv else 0.0
     )
 
-    # Bloqueos adversariales correctos no deben bajar avg_confidence / avg_judge.
-    excluded_for_avg = [r for r in results if r.adversarial_blocked is True]
-    scored_for_avg = [r for r in results if r.adversarial_blocked is not True]
+    # Bloqueos adversariales correctos no deben bajar avg_confidence.
+    excluded_for_conf = [r for r in results if r.adversarial_blocked is True]
+    scored_for_conf = [r for r in results if r.adversarial_blocked is not True]
     avg_confidence = (
-        sum(r.confidence_final for r in scored_for_avg) / len(scored_for_avg)
-        if scored_for_avg
+        sum(r.confidence_final for r in scored_for_conf) / len(scored_for_conf)
+        if scored_for_conf
         else 0.0
     )
+
+    # avg_judge_score: excluir adversarial_blocked y fallbacks técnicos del juez.
+    degraded = [r for r in results if r.judge_degraded]
+    scored_for_judge = [
+        r
+        for r in results
+        if r.adversarial_blocked is not True and not r.judge_degraded
+    ]
     avg_judge = (
-        sum(r.judge_score for r in scored_for_avg) / len(scored_for_avg)
-        if scored_for_avg
+        sum(r.judge_score for r in scored_for_judge) / len(scored_for_judge)
+        if scored_for_judge
         else 0.0
     )
+    judge_fallback_rate = (
+        len(degraded) / len(results) if results else 0.0
+    )
+
     high = [r for r in results if r.confidence_final >= HIGH_CONFIDENCE_THRESHOLD]
     high_rate = len(high) / len(results) if results else 0.0
 
@@ -287,6 +308,21 @@ def _summarize(
 
     patterns = _detect_patterns(results)
 
+    exclusion_bits: list[str] = []
+    if excluded_for_conf:
+        exclusion_bits.append(
+            "avg_confidence excluye adversarial_blocked=True "
+            f"({', '.join(r.id for r in excluded_for_conf)})."
+        )
+    exclusion_bits.append(
+        "avg_judge_score excluye adversarial_blocked=True y "
+        "judge_degraded=True (fallbacks técnicos del juez)."
+    )
+    if degraded:
+        exclusion_bits.append(
+            f"degraded_judge_ids: {', '.join(r.id for r in degraded)}."
+        )
+
     return EvalSummary(
         n_cases=len(results),
         execution_rate=round(execution_rate, 4),
@@ -297,16 +333,18 @@ def _summarize(
         high_confidence_count=len(high),
         execution_accuracy=round(exec_acc, 4) if exec_acc is not None else None,
         execution_accuracy_n=len(with_expected),
-        avg_metrics_excluded_count=len(excluded_for_avg),
-        avg_metrics_excluded_ids=[r.id for r in excluded_for_avg],
+        avg_metrics_excluded_count=len(excluded_for_conf),
+        avg_metrics_excluded_ids=[r.id for r in excluded_for_conf],
         avg_metrics_exclusion_reason=(
-            "Casos con adversarial_blocked=True (bloqueo correcto por "
-            "intención de escritura / guardrails). Se excluyen de "
-            "avg_confidence y avg_judge_score para no castigar el promedio "
-            "global; siguen contando en adversarial_block_rate."
-            if excluded_for_avg
-            else ""
+            " ".join(exclusion_bits)
+            if exclusion_bits
+            else (
+                "Sin exclusiones: avg_confidence sobre no-adversariales; "
+                "avg_judge_score sobre no-adversariales y no-degradados."
+            )
         ),
+        judge_fallback_rate=round(judge_fallback_rate, 4),
+        degraded_judge_ids=[r.id for r in degraded],
         cases=results,
         patterns=patterns,
         started_at=started.isoformat(),
@@ -347,15 +385,11 @@ def _detect_patterns(results: list[CaseResult]) -> list[str]:
             f"JOINs múltiples en preguntas simple: {overjoin} caso(s)."
         )
 
-    judge_fail = sum(
-        1
-        for r in results
-        if "fallo técnico" in " ".join(r.concerns).lower()
-        or "pregunta inferida no proporcionada" in r.inferred_question.lower()
-    )
+    judge_fail = sum(1 for r in results if r.judge_degraded)
     if judge_fail:
         patterns.append(
-            f"Juez degradado / fallback técnico en {judge_fail} caso(s)."
+            f"Juez degradado / fallback técnico en {judge_fail} caso(s): "
+            + ", ".join(r.id for r in results if r.judge_degraded)
         )
 
     for r in results:
@@ -428,9 +462,12 @@ def _print_summary(s: EvalSummary) -> None:
     print(f"Avg judge score:          {s.avg_judge_score:.2f}/5")
     if s.avg_metrics_excluded_count:
         print(
-            f"  (excluidos de avg: {s.avg_metrics_excluded_count} — "
+            f"  (excluidos de avg conf: {s.avg_metrics_excluded_count} — "
             f"{', '.join(s.avg_metrics_excluded_ids)})"
         )
+    print(f"Judge fallback rate:      {s.judge_fallback_rate:.1%}")
+    if s.degraded_judge_ids:
+        print(f"  (degraded: {', '.join(s.degraded_judge_ids)})")
     print(
         f"High confidence (>=0.70):  {s.high_confidence_count}/{s.n_cases} "
         f"({s.high_confidence_rate:.1%})"
