@@ -14,15 +14,28 @@ Métricas:
   - execution_accuracy: % de casos con expected_sql donde el result set
     del SQL generado coincide con el del expected_sql (si ambos corren)
 
+Paralelización:
+  Los casos se ejecutan con ThreadPoolExecutor. El número de workers se
+  lee de EVAL_MAX_WORKERS (o MAX_WORKERS); default 2. Usar 1 para
+  comportamiento secuencial (baseline).
+
+  En el servidor Ollama se recomienda OLLAMA_MAX_LOADED_MODELS=2 y
+  OLLAMA_NUM_PARALLEL=2 para evitar swap de modelos (sqlcoder / qwen)
+  en VRAM cuando hay workers concurrentes.
+
 Uso (desde la raíz del repo, con .venv activo y Ollama levantado):
   python eval/evaluate.py
+  EVAL_MAX_WORKERS=1 python eval/evaluate.py   # secuencial
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +49,10 @@ from pipeline import FinalResponse, run_pipeline  # noqa: E402
 GOLDEN_PATH = ROOT / "eval" / "golden_dataset.json"
 RESULTS_DIR = ROOT / "eval" / "results"
 HIGH_CONFIDENCE_THRESHOLD = 0.70
+DEFAULT_MAX_WORKERS = 2
+
+# Serializa prints de casos concurrentes para que no se intercalen.
+_PRINT_LOCK = threading.Lock()
 
 
 @dataclass
@@ -85,49 +102,117 @@ class EvalSummary:
     total_elapsed_s: float = 0.0
 
 
+def _resolve_max_workers() -> int:
+    """
+    Lee EVAL_MAX_WORKERS o MAX_WORKERS del entorno.
+    Default 2; mínimo 1. Valores inválidos caen al default.
+    """
+    raw = os.getenv("EVAL_MAX_WORKERS") or os.getenv("MAX_WORKERS")
+    if raw is None or not str(raw).strip():
+        return DEFAULT_MAX_WORKERS
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return DEFAULT_MAX_WORKERS
+    return max(1, value)
+
+
+def _run_one_case(case: dict) -> CaseResult:
+    """
+    Ejecuta un caso del golden de punta a punta.
+
+    Aísla excepciones inesperadas en un CaseResult con error, para que
+    un fallo individual no interrumpa al resto del pool.
+    """
+    case_id = case["id"]
+    question = case["question"]
+    difficulty = case["difficulty"]
+    case_t0 = time.perf_counter()
+    try:
+        response = run_pipeline(question)
+        case_result = _score_case(case, response)
+    except Exception as exc:
+        case_result = CaseResult(
+            id=case_id,
+            question=question,
+            difficulty=difficulty,
+            executed=False,
+            is_safe=False,
+            blocked_reason=None,
+            sql="",
+            confidence_final=0.0,
+            judge_score=1,
+            inferred_question="",
+            concerns=[],
+            results_count=None,
+            execution_match=None,
+            adversarial_blocked=None,
+            judge_degraded=False,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    case_result.elapsed_s = round(time.perf_counter() - case_t0, 2)
+    return case_result
+
+
 def main() -> int:
     cases = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
     started = datetime.now(timezone.utc)
     t0 = time.perf_counter()
-    results: list[CaseResult] = []
+    max_workers = _resolve_max_workers()
+    # Buffer indexado: preserva el orden del golden sin race conditions.
+    results: list[CaseResult | None] = [None] * len(cases)
 
-    print(f"Golden dataset: {len(cases)} casos")
+    print(f"Golden dataset: {len(cases)} casos (workers={max_workers})")
+    print(
+        "Nota Ollama: OLLAMA_MAX_LOADED_MODELS=2 y OLLAMA_NUM_PARALLEL=2 "
+        "recomendados para evitar swap de modelos en VRAM."
+    )
     print("-" * 60)
 
-    for case in cases:
-        case_id = case["id"]
-        question = case["question"]
-        difficulty = case["difficulty"]
-        print(f"[{case_id}] {difficulty}: {question[:70]}…")
-        case_t0 = time.perf_counter()
-        try:
-            response = run_pipeline(question)
-            case_result = _score_case(case, response)
-        except Exception as exc:
-            case_result = CaseResult(
-                id=case_id,
-                question=question,
-                difficulty=difficulty,
-                executed=False,
-                is_safe=False,
-                blocked_reason=None,
-                sql="",
-                confidence_final=0.0,
-                judge_score=1,
-                inferred_question="",
-                concerns=[],
-                results_count=None,
-                execution_match=None,
-                adversarial_blocked=None,
-                judge_degraded=False,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-        case_result.elapsed_s = round(time.perf_counter() - case_t0, 2)
-        results.append(case_result)
-        _print_case_line(case_result)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {
+            executor.submit(_run_one_case, case): i
+            for i, case in enumerate(cases)
+        }
+        for future in as_completed(future_to_index):
+            i = future_to_index[future]
+            case = cases[i]
+            case_id = case["id"]
+            difficulty = case["difficulty"]
+            question = case["question"]
+            try:
+                case_result = future.result()
+            except Exception as exc:
+                # Defensa extra: el worker no debería propagar, pero
+                # garantizamos que el pool no se detenga.
+                case_result = CaseResult(
+                    id=case_id,
+                    question=question,
+                    difficulty=difficulty,
+                    executed=False,
+                    is_safe=False,
+                    blocked_reason=None,
+                    sql="",
+                    confidence_final=0.0,
+                    judge_score=1,
+                    inferred_question="",
+                    concerns=[],
+                    results_count=None,
+                    execution_match=None,
+                    adversarial_blocked=None,
+                    judge_degraded=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            results[i] = case_result
+            with _PRINT_LOCK:
+                print(f"[{case_id}] {difficulty}: {question[:70]}…")
+                _print_case_line(case_result)
+
+    assert all(r is not None for r in results)
+    ordered: list[CaseResult] = [r for r in results if r is not None]
 
     finished = datetime.now(timezone.utc)
-    summary = _summarize(results, started, finished, time.perf_counter() - t0)
+    summary = _summarize(ordered, started, finished, time.perf_counter() - t0)
     _print_summary(summary)
     out_path = _save_report(summary)
     print(f"\nReporte guardado en: {out_path}")

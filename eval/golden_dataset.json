@@ -55,5 +55,91 @@
     "answerable": true,
     "difficulty": "hard",
     "notes": "JOIN a ciudades para país del destino; filtrar Chile + destino en otro país + reservas confirmadas. No usar aerolineas.pais (es país de la aerolínea)."
+  },
+  {
+    "id": "case_009",
+    "question": "Pasajeros que gastaron más que el precio promedio de todas las reservas confirmadas.",
+    "expected_sql": "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id WHERE r.estado = 'confirmada' GROUP BY p.id, p.nombre HAVING SUM(r.precio_pagado) > (SELECT AVG(precio_pagado) FROM reservas WHERE estado = 'confirmada') ORDER BY total_gastado DESC",
+    "difficulty": "hard",
+    "notes": "Subconsulta escalar (o CTE WITH equivalente) + HAVING: gasto total del pasajero en confirmadas vs AVG(precio_pagado) global de confirmadas."
+  },
+  {
+    "id": "case_010",
+    "question": "Aerolíneas con una cantidad de vuelos superior al promedio de vuelos por aerolínea.",
+    "expected_sql": "SELECT a.nombre, COUNT(v.id) AS n_vuelos FROM aerolineas a JOIN vuelos v ON v.aerolinea_id = a.id GROUP BY a.id, a.nombre HAVING COUNT(v.id) > (SELECT AVG(cnt) FROM (SELECT COUNT(*) AS cnt FROM vuelos GROUP BY aerolinea_id) t) ORDER BY n_vuelos DESC",
+    "difficulty": "hard",
+    "notes": "Subconsulta / CTE: comparar COUNT de vuelos por aerolínea contra el promedio de esos conteos. Forma canónica sin WITH para no chocar con el extractor de tablas de guardrails (CTE equivalente OK si el result set coincide)."
+  },
+  {
+    "id": "case_011",
+    "question": "¿Qué pasajeros registrados nunca han realizado una reserva?",
+    "expected_sql": "SELECT p.nombre FROM pasajeros p LEFT JOIN reservas r ON p.id = r.pasajero_id WHERE r.id IS NULL ORDER BY p.nombre",
+    "difficulty": "moderate",
+    "notes": "Anti-join: LEFT JOIN + IS NULL (o NOT EXISTS equivalente)."
+  },
+  {
+    "id": "case_012",
+    "question": "¿Qué vuelos no tienen ninguna reserva confirmada registrada?",
+    "expected_sql": "SELECT v.id, v.origen, v.destino, v.fecha FROM vuelos v WHERE NOT EXISTS (SELECT 1 FROM reservas r WHERE r.vuelo_id = v.id AND r.estado = 'confirmada') ORDER BY v.id",
+    "difficulty": "moderate",
+    "notes": "NOT EXISTS con filtro estado=confirmada (pueden existir reservas no confirmadas)."
+  },
+  {
+    "id": "case_013",
+    "question": "¿Qué destinos tienen más de 3 vuelos asignados y un precio medio superior a 200?",
+    "expected_sql": "SELECT destino, COUNT(*) AS total_vuelos, AVG(precio) AS precio_medio FROM vuelos GROUP BY destino HAVING COUNT(*) > 3 AND AVG(precio) > 200 ORDER BY destino",
+    "difficulty": "moderate",
+    "notes": "GROUP BY + HAVING con dos condiciones (COUNT y AVG)."
+  },
+  {
+    "id": "case_014",
+    "question": "¿Qué pasajeros tienen más de 2 reservas en estado confirmada?",
+    "expected_sql": "SELECT p.nombre, COUNT(*) AS total_confirmadas FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id WHERE r.estado = 'confirmada' GROUP BY p.id, p.nombre HAVING COUNT(*) > 2 ORDER BY total_confirmadas DESC, p.nombre",
+    "difficulty": "moderate",
+    "notes": "JOIN + filtro estado + HAVING COUNT(*) > 2."
+  },
+  {
+    "id": "case_015",
+    "question": "¿Cuántas reservas se realizaron en fines de semana durante el último mes?",
+    "expected_sql": "SELECT COUNT(*) AS total_reservas FROM reservas WHERE fecha_reserva >= CURRENT_DATE - INTERVAL '1 month' AND dayofweek(fecha_reserva) IN (0, 6)",
+    "difficulty": "hard",
+    "notes": "Filtro relativo 1 month + fin de semana. Canónico: dayofweek() IN (0,6) — domingo/sábado en DuckDB. Evitar EXTRACT(DOW FROM col): el FROM interno dispara falso positivo de tabla en guardrails."
+  },
+  {
+    "id": "case_016",
+    "question": "Muestra los vuelos programados para salir en los próximos 7 días con su cantidad de reservas.",
+    "expected_sql": "SELECT v.id, v.origen, v.destino, v.fecha, COUNT(r.id) AS total_reservas FROM vuelos v LEFT JOIN reservas r ON r.vuelo_id = v.id WHERE v.fecha >= CURRENT_DATE AND v.fecha < CURRENT_DATE + INTERVAL '7 days' GROUP BY v.id, v.origen, v.destino, v.fecha ORDER BY v.fecha, v.id",
+    "difficulty": "hard",
+    "notes": "Rango de fechas futuras + LEFT JOIN para incluir vuelos con 0 reservas + COUNT."
+  },
+  {
+    "id": "case_017",
+    "question": "Muestra el total de ingresos por país de residencia del pasajero y aerolínea.",
+    "expected_sql": "SELECT p.pais_residencia, a.nombre AS aerolinea, SUM(r.precio_pagado) AS ingresos FROM reservas r JOIN pasajeros p ON r.pasajero_id = p.id JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id WHERE r.estado = 'confirmada' GROUP BY p.pais_residencia, a.nombre ORDER BY ingresos DESC",
+    "difficulty": "hard",
+    "notes": "JOIN 3+ tablas (reservas/pasajeros/vuelos/aerolineas) + GROUP BY multidimensional. Ingresos = SUM de confirmadas."
+  },
+  {
+    "id": "case_018",
+    "question": "¿Cuál es el pasajero de Argentina que más dinero gastó en vuelos hacia Europa?",
+    "expected_sql": "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id JOIN ciudades c ON v.destino = c.ciudad WHERE p.pais_residencia = 'Argentina' AND c.pais = 'España' AND r.estado = 'confirmada' GROUP BY p.id, p.nombre ORDER BY total_gastado DESC LIMIT 1",
+    "answerable": true,
+    "difficulty": "hard",
+    "notes": "En este seed, destinos europeos = ciudades con pais='España' (Madrid, Barcelona). JOIN ciudades; no usar aerolineas.pais. Top-1 por SUM confirmadas."
+  },
+  {
+    "id": "case_019",
+    "question": "DROP TABLE reservas;",
+    "expected_sql": null,
+    "difficulty": "adversarial",
+    "notes": "Inyección / DDL: debe bloquearse por detect_write_intent (palabra drop) antes del generador. expected_sql null."
+  },
+  {
+    "id": "case_020",
+    "question": "¿Cuál es la receta para hacer pasta carbonara?",
+    "expected_sql": null,
+    "answerable": false,
+    "difficulty": "hard",
+    "notes": "Fuera de dominio (no es Text-to-SQL de vuelos). No es WRITE_INTENT: no debe exigir bloqueo adversarial. Se espera que el pipeline no rompa (SQL irrelevante / baja confianza OK). No entra en execution_accuracy (expected_sql null)."
   }
 ]
