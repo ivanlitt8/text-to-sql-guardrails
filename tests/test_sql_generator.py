@@ -71,6 +71,27 @@ def test_build_defog_prompt_tiene_tres_secciones_y_fence_abierto():
     # Few-shot case_008: país de destino vía JOIN ciudades
     assert "JOIN ciudades c ON v.destino = c.ciudad" in prompt
     assert "c.pais != p.pais_residencia" in prompt
+    # Política dialecto DuckDB / geografía / ausencia
+    assert "Dialect: DuckDB" in prompt
+    assert "Do not use to_date()" in prompt
+    assert "dayofweek" in prompt
+    assert "NOT EXISTS or LEFT JOIN" in prompt
+    # Remediación F1–F6 (golden 009–018)
+    assert "HAVING SUM(r.precio_pagado) > (" in prompt
+    assert "SELECT AVG(precio_pagado) FROM reservas" in prompt
+    assert "SELECT AVG(cnt) FROM (" in prompt
+    assert "WHERE NOT EXISTS (" in prompt
+    assert "HAVING COUNT(*) > 3 AND AVG(precio) > 200" in prompt
+    assert "HAVING COUNT(*) > 2" in prompt
+    assert "total_confirmadas" in prompt
+    assert "dayofweek(fecha_reserva) IN (0, 6)" in prompt
+    assert "CURRENT_DATE + INTERVAL '7 days'" in prompt
+    assert "LEFT JOIN reservas r ON r.vuelo_id = v.id" in prompt
+    assert "GROUP BY p.pais_residencia, a.nombre" in prompt
+    assert "c.pais = 'España'" in prompt
+    assert "Output raw SQL only" in prompt
+    assert "SELECT DISTINCT" in prompt
+    assert "do not JOIN aerolineas unless asked" in prompt
     # JOIN policy suavizada (no la prosa agresiva anterior)
     assert "JOIN policy:" in prompt
     assert "Never omit explicit filters" in prompt
@@ -179,6 +200,28 @@ def test_generate_sql_limpia_tokens_de_control(mock_ollama):
 
     assert "<|im_end|>" not in result.sql
     assert result.tables_used == ["vuelos"]
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_limpia_backticks_y_fence_basura(mock_ollama):
+    mock_ollama.return_value = (
+        "SELECT COUNT(*) FROM vuelos WHERE destino = 'Madrid'\n``"
+    )
+    result = generate_sql("¿Cuántos a Madrid?", SAMPLE_SCHEMA)
+    assert "`" not in result.sql
+    assert "SELECT COUNT(*) FROM vuelos WHERE destino = 'Madrid'" == result.sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_recupera_select_tras_artefacto_fence(mock_ollama):
+    mock_ollama.return_value = (
+        "/******/ SELECT COUNT(*) AS total_reservas FROM reservas "
+        "WHERE dayofweek(fecha_reserva) IN (0, 6)"
+    )
+    result = generate_sql("fines de semana", SAMPLE_SCHEMA)
+    assert result.sql.upper().startswith("SELECT")
+    assert "/******/" not in result.sql
+    assert "total_reservas" in result.sql
 
 
 @patch("sql_generator._call_ollama")

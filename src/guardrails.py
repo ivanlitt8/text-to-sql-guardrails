@@ -199,15 +199,46 @@ def enforce_limit(sql: str, limit: int | None = None) -> str:
     """
     Si el SQL no tiene LIMIT, agrega `LIMIT {limit}` al final.
     El default sale de DEFAULT_ROW_LIMIT (env) o 1000.
+
+    Antes de tocar el LIMIT, sanitiza basura típica del generador
+    (`;`, backticks, fences `/******/`, etc.).
     """
     if limit is None:
         limit = _default_row_limit()
 
-    if _has_limit(sql):
-        return sql.strip().rstrip(";").strip()
-
-    cleaned = sql.strip().rstrip(";").strip()
+    cleaned = sanitize_generated_sql(sql)
+    if _has_limit(cleaned):
+        return cleaned
     return f"{cleaned} LIMIT {limit}"
+
+
+# Fence/basura que sqlcoder a veces mezcla con el SQL (case_002/011/014/015).
+_SQL_ARTIFACT_RE = re.compile(
+    r"(?:/{1,2}\*+/?)|(?:\*+/)|(?:`+)",
+)
+
+
+def sanitize_generated_sql(sql: str) -> str:
+    """
+    Limpia SQL de un solo statement antes de validar / ejecutar / añadir LIMIT.
+
+    - elimina artefacts de fence (` `` `, `/******/`, `***/`)
+    - si hay ';', conserva solo el primer statement
+    - strip / rstrip(';')
+    """
+    text = sql.strip()
+    text = _SQL_ARTIFACT_RE.sub(" ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text).strip()
+    if ";" in text:
+        text = text.split(";", 1)[0]
+    text = text.strip().rstrip(";").strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines).strip()
+
+
+# Alias interno (compat con llamadas previas / tests).
+_sanitize_generated_sql = sanitize_generated_sql
 
 
 def check_query(

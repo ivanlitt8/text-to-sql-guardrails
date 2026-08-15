@@ -53,6 +53,44 @@ def test_no_duplica_limit_existente():
     assert "LIMIT 5" in result.sanitized_sql.upper()
 
 
+def test_enforce_limit_limpia_punto_y_coma_y_basura_trailing():
+    """case_014-like: ';' + ruido tras el statement no debe romper el parser."""
+    sql = (
+        "SELECT p.nombre, COUNT(r.id) AS total_reservas "
+        "FROM reservas r JOIN pasajeros p ON r.pasajero_id = p.id "
+        "GROUP BY p.nombre HAVING COUNT(r.id) > 2;\n /******/"
+    )
+    cleaned = enforce_limit(sql)
+    assert ";" not in cleaned
+    assert "/******/" not in cleaned
+    assert cleaned.upper().endswith("LIMIT 1000")
+    assert cleaned.upper().startswith("SELECT")
+
+
+def test_enforce_limit_limpia_backticks_trailing():
+    """case_002/011: backticks al cierre rompían DuckDB al inyectar LIMIT."""
+    sql = "SELECT COUNT(*) FROM vuelos WHERE destino = 'Madrid'\n``"
+    cleaned = enforce_limit(sql)
+    assert "`" not in cleaned
+    assert cleaned == "SELECT COUNT(*) FROM vuelos WHERE destino = 'Madrid' LIMIT 1000"
+
+
+def test_enforce_limit_limpia_artefacto_en_medio_del_select():
+    sql = (
+        "SELECT COUNT(*) AS /******/ total_reservas FROM reservas "
+        "WHERE fecha_reserva >= CURRENT_DATE - INTERVAL '1 month'"
+    )
+    cleaned = enforce_limit(sql)
+    assert "/******/" not in cleaned
+    assert "COUNT(*) AS total_reservas" in cleaned.replace("  ", " ")
+    assert cleaned.upper().endswith("LIMIT 1000")
+
+
+def test_enforce_limit_rstrip_solo_punto_y_coma_final():
+    sql = "SELECT destino FROM vuelos;"
+    assert enforce_limit(sql) == "SELECT destino FROM vuelos LIMIT 1000"
+
+
 @pytest.mark.parametrize(
     "sql,keyword",
     [

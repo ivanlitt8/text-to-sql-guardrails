@@ -114,14 +114,23 @@ def build_defog_prompt(question: str, schema: str) -> str:
     Arma el prompt en formato Defog para sqlcoder:
     ### Task / ### Database Schema / ### Answer + fence sql abierto.
 
-    Combina few-shot concreto (agregaciones, JOINs, conteos, ingresos)
-    con una JOIN policy breve que no poda filtros explícitos de la pregunta.
+    Combina few-shot concreto (agregaciones, JOINs, subconsultas, anti-joins,
+    HAVING, fechas DuckDB, geografía vía ciudades) con una JOIN policy breve
+    que no poda filtros explícitos de la pregunta.
     """
     return (
         "### Task\n"
         "Generate a SQL query to answer the following question.\n"
         "Use ONLY exact table/column names from the schema. "
         "Do not invent tables. Do not add filters the question does not ask.\n"
+        "Dialect: DuckDB. Prefer CURRENT_DATE, INTERVAL, and dayofweek(col). "
+        "Do not use to_date() or ::text casts on DATE columns. "
+        "Output raw SQL only: no markdown fences, no backticks, no /* */ junk.\n"
+        "Country of origin/destination: JOIN ciudades "
+        "(do not invent literals like 'Europa'). "
+        "Absence of related rows: use NOT EXISTS or LEFT JOIN ... IS NULL. "
+        "When listing people who may match multiple rows, use SELECT DISTINCT. "
+        "Select only columns needed; do not JOIN aerolineas unless asked.\n"
         "JOIN policy: JOIN tables when the question needs columns from more "
         "than one table (e.g. ingresos from reservas + destino from vuelos). "
         "Prefer the simplest correct query; avoid unnecessary JOINs, but do "
@@ -170,6 +179,86 @@ def build_defog_prompt(question: str, schema: str) -> str:
         "WHERE p.pais_residencia = 'Chile' "
         "AND c.pais != p.pais_residencia "
         "AND r.estado = 'confirmada' ORDER BY p.nombre\n\n"
+        # F1: gasto vs AVG de reservas confirmadas
+        "Q: Pasajeros que gastaron más que el precio promedio de todas "
+        "las reservas confirmadas.\n"
+        "A: SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado "
+        "FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id "
+        "WHERE r.estado = 'confirmada' GROUP BY p.id, p.nombre "
+        "HAVING SUM(r.precio_pagado) > ("
+        "SELECT AVG(precio_pagado) FROM reservas "
+        "WHERE estado = 'confirmada') "
+        "ORDER BY total_gastado DESC\n\n"
+        # F2: conteo por aerolínea vs promedio de conteos
+        "Q: Aerolíneas con una cantidad de vuelos superior al promedio "
+        "de vuelos por aerolínea.\n"
+        "A: SELECT a.nombre, COUNT(v.id) AS n_vuelos "
+        "FROM aerolineas a JOIN vuelos v ON v.aerolinea_id = a.id "
+        "GROUP BY a.id, a.nombre "
+        "HAVING COUNT(v.id) > ("
+        "SELECT AVG(cnt) FROM ("
+        "SELECT COUNT(*) AS cnt FROM vuelos GROUP BY aerolinea_id) t) "
+        "ORDER BY n_vuelos DESC\n\n"
+        # F3: anti-join / NOT EXISTS
+        "Q: ¿Qué vuelos no tienen ninguna reserva confirmada registrada?\n"
+        "A: SELECT v.id, v.origen, v.destino, v.fecha FROM vuelos v "
+        "WHERE NOT EXISTS ("
+        "SELECT 1 FROM reservas r "
+        "WHERE r.vuelo_id = v.id AND r.estado = 'confirmada') "
+        "ORDER BY v.id\n\n"
+        # F4: HAVING con AVG (no columna cruda)
+        "Q: ¿Qué destinos tienen más de 3 vuelos asignados y un precio "
+        "medio superior a 200?\n"
+        "A: SELECT destino, COUNT(*) AS total_vuelos, "
+        "AVG(precio) AS precio_medio FROM vuelos "
+        "GROUP BY destino "
+        "HAVING COUNT(*) > 3 AND AVG(precio) > 200 "
+        "ORDER BY destino\n\n"
+        # F4b: listar pasajeros con HAVING (no COUNT escalar del total)
+        "Q: ¿Qué pasajeros tienen más de 2 reservas en estado confirmada?\n"
+        "A: SELECT p.nombre, COUNT(*) AS total_confirmadas "
+        "FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id "
+        "WHERE r.estado = 'confirmada' "
+        "GROUP BY p.id, p.nombre "
+        "HAVING COUNT(*) > 2 "
+        "ORDER BY total_confirmadas DESC, p.nombre\n\n"
+        # F5: fechas DuckDB (fin de semana + ventana futura)
+        "Q: ¿Cuántas reservas se realizaron en fines de semana durante "
+        "el último mes?\n"
+        "A: SELECT COUNT(*) AS total_reservas FROM reservas "
+        "WHERE fecha_reserva >= CURRENT_DATE - INTERVAL '1 month' "
+        "AND dayofweek(fecha_reserva) IN (0, 6)\n\n"
+        "Q: Muestra los vuelos programados para salir en los próximos "
+        "7 días con su cantidad de reservas.\n"
+        "A: SELECT v.id, v.origen, v.destino, v.fecha, "
+        "COUNT(r.id) AS total_reservas FROM vuelos v "
+        "LEFT JOIN reservas r ON r.vuelo_id = v.id "
+        "WHERE v.fecha >= CURRENT_DATE "
+        "AND v.fecha < CURRENT_DATE + INTERVAL '7 days' "
+        "GROUP BY v.id, v.origen, v.destino, v.fecha "
+        "ORDER BY v.fecha, v.id\n\n"
+        # F6: matriz ingresos + Europa vía ciudades
+        "Q: Muestra el total de ingresos por país de residencia del "
+        "pasajero y aerolínea.\n"
+        "A: SELECT p.pais_residencia, a.nombre AS aerolinea, "
+        "SUM(r.precio_pagado) AS ingresos FROM reservas r "
+        "JOIN pasajeros p ON r.pasajero_id = p.id "
+        "JOIN vuelos v ON r.vuelo_id = v.id "
+        "JOIN aerolineas a ON v.aerolinea_id = a.id "
+        "WHERE r.estado = 'confirmada' "
+        "GROUP BY p.pais_residencia, a.nombre "
+        "ORDER BY ingresos DESC\n\n"
+        "Q: ¿Cuál es el pasajero de Argentina que más dinero gastó en "
+        "vuelos hacia Europa?\n"
+        "A: SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado "
+        "FROM pasajeros p "
+        "JOIN reservas r ON p.id = r.pasajero_id "
+        "JOIN vuelos v ON r.vuelo_id = v.id "
+        "JOIN ciudades c ON v.destino = c.ciudad "
+        "WHERE p.pais_residencia = 'Argentina' "
+        "AND c.pais = 'España' AND r.estado = 'confirmada' "
+        "GROUP BY p.id, p.nombre "
+        "ORDER BY total_gastado DESC LIMIT 1\n\n"
         "### Database Schema\n"
         f"{schema}\n\n"
         "### Answer\n"
@@ -243,10 +332,17 @@ def _call_ollama(prompt: str) -> str:
 
 def _extract_sql_from_response(raw: str) -> str:
     """Limpia tokens de control, fences markdown y prosa previa al SQL."""
+    from guardrails import _SQL_ARTIFACT_RE, sanitize_generated_sql
+
     text = _CONTROL_TOKEN_RE.sub("", raw).strip()
     text = _normalize_sql(text)
     if text.endswith("```"):
         text = text[: text.rfind("```")].rstrip()
+
+    # Solo artefacts de fence (sin cortar en ';') para no perder un SELECT
+    # que venga después de basura tipo `/******/`.
+    text = _SQL_ARTIFACT_RE.sub(" ", text)
+    text = re.sub(r"[ \t]+", " ", text).strip()
 
     if not text:
         return text
@@ -255,8 +351,8 @@ def _extract_sql_from_response(raw: str) -> str:
     for keyword in ("WITH ", "SELECT ", "INSERT ", "UPDATE ", "DELETE "):
         idx = upper.find(keyword)
         if idx != -1:
-            return text[idx:].strip()
-    return text
+            return sanitize_generated_sql(text[idx:])
+    return sanitize_generated_sql(text)
 
 
 def _normalize_sql(sql: str) -> str:
