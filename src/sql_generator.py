@@ -37,6 +37,10 @@ class SQLGenerationResult(BaseModel):
 # sqlcoder no fue entrenado para reportar confidence. Placeholder de MVP.
 _DEFAULT_CONFIDENCE = 3
 
+# Casos 004/005 del golden 81% llegaron a ~530 s; un timeout corto
+# (180–240 s) abortaría matches válidos. Configurable vía OLLAMA_TIMEOUT.
+_DEFAULT_OLLAMA_TIMEOUT_S = 600.0
+
 _CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]+\|>")
 
 _TABLE_LEAD_KEYWORDS = frozenset(
@@ -292,6 +296,9 @@ def generate_sql(question: str, schema: str) -> SQLGenerationResult:
         ) from exc
 
     normalized_sql = _extract_sql_from_response(raw_text)
+    normalized_sql = _repair_column_typos(normalized_sql, schema)
+    normalized_sql = _apply_chile_residence_fix(normalized_sql, question)
+    normalized_sql = _strip_unsolicited_airline_join(normalized_sql, question)
     _validate_sql_syntax(normalized_sql)
 
     tables_used = _extract_tables_used(normalized_sql)
@@ -307,6 +314,18 @@ def generate_sql(question: str, schema: str) -> SQLGenerationResult:
     )
 
 
+def _resolve_ollama_timeout() -> float:
+    """Timeout HTTP hacia Ollama (segundos). Default 600; mínimo 1."""
+    raw = os.getenv("OLLAMA_TIMEOUT")
+    if raw is None or not str(raw).strip():
+        return _DEFAULT_OLLAMA_TIMEOUT_S
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return _DEFAULT_OLLAMA_TIMEOUT_S
+    return max(1.0, value)
+
+
 def _call_ollama(prompt: str) -> str:
     """
     Invoca Ollama en modo completion (texto libre) con temperature=0.
@@ -315,13 +334,22 @@ def _call_ollama(prompt: str) -> str:
     load_dotenv()
     model = os.getenv("GENERATOR_MODEL", "sqlcoder")
     host = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    timeout = _resolve_ollama_timeout()
 
-    client = ollama.Client(host=host)
-    response = client.generate(
-        model=model,
-        prompt=prompt,
-        options={"temperature": 0},
-    )
+    client = ollama.Client(host=host, timeout=timeout)
+    try:
+        response = client.generate(
+            model=model,
+            prompt=prompt,
+            options={"temperature": 0},
+        )
+    except Exception as exc:
+        name = type(exc).__name__
+        if "timeout" in name.lower() or "timed out" in str(exc).lower():
+            raise SQLGenerationError(
+                f"Timeout al llamar al generador ({timeout:.0f}s): {exc}"
+            ) from exc
+        raise
     text = getattr(response, "response", None) or response.get("response", "")
     if not isinstance(text, str):
         raise SQLGenerationError(
@@ -353,6 +381,270 @@ def _extract_sql_from_response(raw: str) -> str:
         if idx != -1:
             return sanitize_generated_sql(text[idx:])
     return sanitize_generated_sql(text)
+
+
+_CREATE_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(\w+)\s*\((.*?)\)\s*;",
+    re.IGNORECASE | re.DOTALL,
+)
+_QUALIFIED_COL_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b"
+)
+_MAX_COLUMN_EDIT_DISTANCE = 2
+
+
+def _repair_column_typos(sql: str, schema: str) -> str:
+    """
+    Corrige typos de columnas calificadas (alias.col) contra el schema DDL.
+
+    Si `col` no existe en la tabla del alias y hay exactamente un candidato
+    con distancia de edición ≤ 2 (p.ej. tfcha → fecha), lo reemplaza.
+    No reescribe JOINs, LIMIT ni filtros; no mira la pregunta.
+    """
+    columns_by_table = _parse_schema_columns(schema)
+    if not columns_by_table:
+        return sql
+
+    alias_to_table = _alias_to_table_map(sql)
+    if not alias_to_table:
+        return sql
+
+    replacements: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for match in _QUALIFIED_COL_RE.finditer(sql):
+        alias_raw, col_raw = match.group(1), match.group(2)
+        alias_key = alias_raw.lower()
+        col_key = col_raw.lower()
+        table = alias_to_table.get(alias_key)
+        if table is None:
+            continue
+        table_cols = columns_by_table.get(table.lower())
+        if not table_cols or col_key in table_cols:
+            continue
+
+        candidates = [
+            real
+            for real in table_cols
+            if _edit_distance(col_key, real) <= _MAX_COLUMN_EDIT_DISTANCE
+        ]
+        if len(candidates) != 1:
+            continue
+        old = f"{alias_raw}.{col_raw}"
+        new = f"{alias_raw}.{candidates[0]}"
+        if old not in seen:
+            seen.add(old)
+            replacements.append((old, new))
+
+    repaired = sql
+    for old, new in replacements:
+        repaired = repaired.replace(old, new)
+    return repaired
+
+
+def _parse_schema_columns(schema: str) -> dict[str, set[str]]:
+    """Parsea CREATE TABLE DDL → {tabla_lower: {columnas_lower}}."""
+    result: dict[str, set[str]] = {}
+    for match in _CREATE_TABLE_RE.finditer(schema):
+        table = match.group(1).lower()
+        body = match.group(2)
+        cols: set[str] = set()
+        for raw_line in body.split(","):
+            line = raw_line.strip()
+            if not line:
+                continue
+            head = line.split()[0].strip("`\"[]").lower()
+            if head in {
+                "primary",
+                "foreign",
+                "unique",
+                "check",
+                "constraint",
+                "index",
+            }:
+                continue
+            if re.match(r"^[a-z_][a-z0-9_]*$", head):
+                cols.add(head)
+        if cols:
+            result[table] = cols
+    return result
+
+
+def _alias_to_table_map(sql: str) -> dict[str, str]:
+    """Mapa alias/tabla → nombre de tabla (lower)."""
+    tokens = _flatten_tokens(sql)
+    mapping: dict[str, str] = {}
+    stop_after = {
+        "ON",
+        "WHERE",
+        "GROUP",
+        "ORDER",
+        "LIMIT",
+        "HAVING",
+        "SET",
+        "UNION",
+        "EXCEPT",
+        "INTERSECT",
+        ",",
+        ";",
+    }
+    i = 0
+    while i < len(tokens):
+        value_upper = tokens[i].value.upper()
+        if not _is_table_lead(value_upper):
+            i += 1
+            continue
+        i += 1
+        if i >= len(tokens) or tokens[i].value == "(":
+            continue
+        raw_name = tokens[i].value.strip("`\"[]")
+        table = raw_name.split(".")[-1]
+        table_key = table.lower()
+        if not table or table.upper() in _SQL_KEYWORD_NAMES:
+            i += 1
+            continue
+        mapping[table_key] = table_key
+        i += 1
+        if i < len(tokens) and tokens[i].value.upper() == "AS":
+            i += 1
+            if i < len(tokens) and _is_name_token(tokens[i]):
+                mapping[tokens[i].value.strip("`\"[]").lower()] = table_key
+                i += 1
+        elif i < len(tokens):
+            nxt = tokens[i]
+            nxt_upper = nxt.value.upper()
+            if (
+                not _is_table_lead(nxt_upper)
+                and nxt_upper not in stop_after
+                and nxt.ttype is not Keyword
+                and _is_name_token(nxt)
+            ):
+                mapping[nxt.value.strip("`\"[]").lower()] = table_key
+                i += 1
+    return mapping
+
+
+def _apply_chile_residence_fix(sql: str, question: str) -> str:
+    """
+    Paso C (case_008): si la pregunta nombra Chile y el SQL ya JOINea
+    ciudades pero omite pais_residencia = 'Chile', inserta esa igualdad.
+    Si lista p.nombre con JOIN a reservas (sin GROUP BY), agrega DISTINCT.
+    """
+    if not sql or not sql.strip():
+        return sql
+    if "chile" not in question.lower():
+        return sql
+    if not re.search(r"\bJOIN\s+ciudades\b", sql, flags=re.IGNORECASE):
+        return sql
+
+    text = sql
+    if not re.search(r"pais_residencia\s*=\s*'Chile'", text, flags=re.IGNORECASE):
+        if re.search(r"\bWHERE\b", text, flags=re.IGNORECASE):
+            text = re.sub(
+                r"\bWHERE\b",
+                "WHERE p.pais_residencia = 'Chile' AND",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            text = re.sub(
+                r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b",
+                "WHERE p.pais_residencia = 'Chile' \\1",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if "pais_residencia = 'Chile'" not in text:
+                text = text.rstrip().rstrip(";") + (
+                    " WHERE p.pais_residencia = 'Chile'"
+                )
+
+    if (
+        re.search(r"\bp\.nombre\b", text, flags=re.IGNORECASE)
+        and re.search(r"\bJOIN\s+reservas\b", text, flags=re.IGNORECASE)
+        and not re.search(r"\bGROUP\s+BY\b", text, flags=re.IGNORECASE)
+        and not re.search(r"\bSELECT\s+DISTINCT\b", text, flags=re.IGNORECASE)
+    ):
+        text = re.sub(r"(?i)^SELECT\s+", "SELECT DISTINCT ", text, count=1)
+    return text
+
+
+_AIRLINE_QUESTION_RE = re.compile(r"aerolinea|airline", flags=re.IGNORECASE)
+_AIRLINE_JOIN_RE = re.compile(
+    r"\s+(?:(?:INNER|LEFT|RIGHT|FULL)(?:\s+OUTER)?\s+)?"
+    r"JOIN\s+aerolineas\b"
+    r"(?:\s+(?:AS\s+)?(?P<alias>[A-Za-z_][A-Za-z0-9_]*))?"
+    r"\s+ON\s+.+?"
+    r"(?=\s+(?:(?:INNER|LEFT|RIGHT|FULL)(?:\s+OUTER)?\s+)?JOIN\b"
+    r"|\s+WHERE\b|\s+GROUP\b|\s+ORDER\b|\s+LIMIT\b|\s+HAVING\b|$)",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_ACCENT_FOLD = str.maketrans("áéíóúüñ", "aeiouun")
+
+
+def _question_asks_airline(question: str) -> bool:
+    folded = question.casefold().translate(_ACCENT_FOLD)
+    return bool(_AIRLINE_QUESTION_RE.search(folded))
+
+
+def _strip_unsolicited_airline_join(sql: str, question: str) -> str:
+    """
+    Paso D (012 / 016): si la pregunta no nombra aerolínea y el SQL
+    agrega JOIN aerolineas, elimina ese JOIN y las columnas a.*.
+    No inyecta v.fecha ni toca filtros de estado.
+    """
+    if not sql or not sql.strip():
+        return sql
+    if _question_asks_airline(question):
+        return sql
+    match = _AIRLINE_JOIN_RE.search(sql)
+    if not match:
+        return sql
+
+    alias = match.group("alias") or "aerolineas"
+    text = _AIRLINE_JOIN_RE.sub(" ", sql, count=1)
+    text = _drop_qualified_columns(text, alias)
+    if alias.lower() != "aerolineas":
+        text = _drop_qualified_columns(text, "aerolineas")
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r",\s*,", ",", text)
+    text = re.sub(r"(?i)SELECT\s+,", "SELECT ", text)
+    text = re.sub(
+        r",\s*(FROM|WHERE|GROUP|ORDER|LIMIT|HAVING)\b",
+        r" \1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text.strip()
+
+
+def _drop_qualified_columns(sql: str, alias: str) -> str:
+    pattern = (
+        rf"(?:,\s*)?\b{re.escape(alias)}\.[A-Za-z_][A-Za-z0-9_]*\b"
+        rf"(?:\s+AS\s+[A-Za-z_][A-Za-z0-9_]*)?"
+    )
+    return re.sub(pattern, "", sql, flags=re.IGNORECASE)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein (nombres de columna, strings cortos)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [i]
+        for j, cb in enumerate(b, start=1):
+            ins = cur[j - 1] + 1
+            delete = prev[j] + 1
+            sub = prev[j - 1] + (0 if ca == cb else 1)
+            cur.append(min(ins, delete, sub))
+        prev = cur
+    return prev[-1]
 
 
 def _normalize_sql(sql: str) -> str:

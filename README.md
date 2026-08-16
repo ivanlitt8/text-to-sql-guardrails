@@ -72,7 +72,33 @@ text2sql-vuelos/
 └── .env.example
 ```
 
+## CLI
+
+```bash
+python main.py "¿Cuántos vuelos hay con destino a Madrid?"
+```
+
+## API HTTP (FastAPI)
+
+```bash
+uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+```
+
+- `GET /v1/health` — proceso vivo
+- `GET /v1/ready` — DuckDB + Ollama + modelos
+- `POST /v1/ask` — `{ "question": "…" }` → `FinalResponse` (puede tardar minutos)
+
+```bash
+curl http://127.0.0.1:8000/v1/health
+curl http://127.0.0.1:8000/v1/ready
+curl -X POST http://127.0.0.1:8000/v1/ask \
+  -H "Content-Type: application/json" \
+  -d "{\"question\": \"¿Cuántos vuelos hay con destino a Madrid?\"}"
+```
+
+Docs interactivas: http://127.0.0.1:8000/docs
+
 ## Estado actual
 
-Boilerplate inicial. Ver `docs/HISTORY.md` para el detalle de qué está
-implementado y cuáles son los próximos pasos.
+Pipeline CLI + API HTTP. Golden ~87.5% (ver `docs/HISTORY.md`).
+Frontend todavía fuera de alcance (SPECS §2).

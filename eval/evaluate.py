@@ -23,6 +23,10 @@ Paralelización:
   OLLAMA_NUM_PARALLEL=2 para evitar swap de modelos (sqlcoder / qwen)
   en VRAM cuando hay workers concurrentes.
 
+  OLLAMA_TIMEOUT (segundos, default 600) aplica a generador y juez para
+  que un cuelgue de Ollama no deje el eval bloqueado sin fin. No usar
+  valores < 530 si se quiere cubrir los casos más lentos del golden.
+
 Uso (desde la raíz del repo, con .venv activo y Ollama levantado):
   python eval/evaluate.py
   EVAL_MAX_WORKERS=1 python eval/evaluate.py   # secuencial
@@ -127,6 +131,11 @@ def _run_one_case(case: dict) -> CaseResult:
     case_id = case["id"]
     question = case["question"]
     difficulty = case["difficulty"]
+    with _PRINT_LOCK:
+        print(
+            f"[{case_id}] start {difficulty}: {question[:70]}…",
+            flush=True,
+        )
     case_t0 = time.perf_counter()
     try:
         response = run_pipeline(question)
@@ -165,7 +174,8 @@ def main() -> int:
     print(f"Golden dataset: {len(cases)} casos (workers={max_workers})")
     print(
         "Nota Ollama: OLLAMA_MAX_LOADED_MODELS=2 y OLLAMA_NUM_PARALLEL=2 "
-        "recomendados para evitar swap de modelos en VRAM."
+        "recomendados para evitar swap de modelos en VRAM. "
+        "OLLAMA_TIMEOUT default 600s (casos lentos del golden ~530s)."
     )
     print("-" * 60)
 
@@ -205,7 +215,7 @@ def main() -> int:
                 )
             results[i] = case_result
             with _PRINT_LOCK:
-                print(f"[{case_id}] {difficulty}: {question[:70]}…")
+                print(f"[{case_id}] done {difficulty}: {question[:70]}…", flush=True)
                 _print_case_line(case_result)
 
     assert all(r is not None for r in results)

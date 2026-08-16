@@ -152,11 +152,25 @@ def _get_instructor_client() -> Any:
 
     # Mode.JSON evita tool-calling (InstructorRetryException por cuelgues
     # de formato con qwen2.5:3b).
+    timeout = _resolve_ollama_timeout()
     return instructor.from_provider(
         f"ollama/{model}",
         base_url=base_url,
         mode=Mode.JSON,
+        timeout=timeout,
     )
+
+
+def _resolve_ollama_timeout() -> float:
+    """Timeout HTTP hacia Ollama (segundos). Alineado al generador."""
+    raw = os.getenv("OLLAMA_TIMEOUT")
+    if raw is None or not str(raw).strip():
+        return 600.0
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        return 600.0
+    return max(1.0, value)
 
 
 def _fallback_verdict(
