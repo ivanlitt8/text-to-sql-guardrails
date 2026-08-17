@@ -1,12 +1,12 @@
 {
   "n_cases": 20,
-  "execution_rate": 0.8824,
+  "execution_rate": 0.8235,
   "adversarial_block_rate": 1.0,
-  "avg_confidence": 0.6176,
-  "avg_judge_score": 3.4118,
-  "high_confidence_rate": 0.3,
-  "high_confidence_count": 6,
-  "execution_accuracy": 0.875,
+  "avg_confidence": 0.5824,
+  "avg_judge_score": 3.1765,
+  "high_confidence_rate": 0.25,
+  "high_confidence_count": 5,
+  "execution_accuracy": 0.6875,
   "execution_accuracy_n": 16,
   "avg_metrics_excluded_count": 3,
   "avg_metrics_excluded_ids": [
@@ -36,7 +36,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona los destinos (v.destino) y cuenta las reservas (COUNT(r.id) AS total_reservas) y suma los ingresos (SUM(r.precio_pagado) AS ingresos) de las reservas (r) que coinciden con los vuelos (v) en los últimos 90 días. La consulta agrupa por el destino y ordena en orden descendente por el número total de reservas. Finalmente, limita los resultados a los 5 primeros. Esta consulta responde directamente a la pregunta original, cubriendo los destinos, el número de reservas y el ingreso total. La consulta no incluye detalles adicionales sobre los vuelos o las fechas de reserva.",
       "error": null,
-      "elapsed_s": 172.96
+      "elapsed_s": 62.6
     },
     {
       "id": "case_002",
@@ -56,7 +56,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona el COUNT(*) de vuelos donde el campo 'destino' es igual a 'Madrid'. Esto cubre directamente la pregunta original que busca cuántos vuelos tienen como destino a Madrid. No hay filtros adicionales, agregaciones, JOINs o ORDER BY/LIMIT que no estén relacionados con la pregunta original. La consulta limita el resultado a 1000, pero esto no afecta la intención de contar todos los vuelos a Madrid.",
       "error": null,
-      "elapsed_s": 116.89
+      "elapsed_s": 24.57
     },
     {
       "id": "case_003",
@@ -66,17 +66,20 @@
       "is_safe": true,
       "blocked_reason": null,
       "sql": "SELECT a.nombre AS aerolinea, AVG(v.precio) AS precio_promedio FROM vuelos v JOIN aerolineas a ON v.aerolinea_id = a.id GROUP BY a.nombre LIMIT 1000",
-      "confidence_final": 0.8,
-      "judge_score": 5,
+      "confidence_final": 0.6,
+      "judge_score": 3,
       "inferred_question": "¿Cuál es el precio promedio de los vuelos por cada aerolínea?",
-      "concerns": [],
+      "concerns": [
+        "El SQL no responde a la pregunta original porque no incluye el orden de los resultados.",
+        "El SQL no responde a la pregunta original porque no proporciona los 1000 primeros resultados."
+      ],
       "results_count": 5,
       "execution_match": true,
       "adversarial_blocked": null,
       "judge_degraded": false,
-      "judge_reasoning": "La consulta SQL selecciona la columna 'nombre' de la tabla 'aerolineas' y la renombra como 'aerolinea'. Luego, utiliza la función AVG() para calcular el promedio del campo 'precio' de la tabla 'vuelos'. La consulta hace un JOIN entre las tablas 'vuelos' y 'aerolineas' basándose en la columna 'aerolinea_id'. Finalmente, la consulta agrupa los resultados por 'aerolinea' y limita el resultado a 1000 filas. Esta consulta responde a la pregunta original de calcular el precio promedio de los vuelos por cada aerolínea.",
+      "judge_reasoning": "La consulta SQL selecciona la columna 'nombre' de la tabla 'aerolineas' y la renombrada como 'aerolinea'. Luego, calcula el promedio de la columna 'precio' de la tabla 'vuelos' agrupando por 'aerolinea'. Finalmente, aplica un filtro de LIMIT 1000. Esta consulta responde a la pregunta original de calcular el precio promedio por aerolínea, pero omite el orden de los resultados y no proporciona los 1000 primeros resultados.",
       "error": null,
-      "elapsed_s": 343.25
+      "elapsed_s": 233.44
     },
     {
       "id": "case_004",
@@ -98,7 +101,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona el nombre del pasajero y el precio pagado de las reservas donde el estado es 'cancelada'. Esto cubre la parte de pasajeros con reservas canceladas y el monto pagado. No incluye el total de las reservas canceladas, solo el monto de una sola reserva. La pregunta original busca el total pagado en reservas canceladas, pero la consulta solo devuelve el monto de una sola reserva. Por lo tanto, la consulta no responde exactamente a la pregunta original.",
       "error": null,
-      "elapsed_s": 121.04
+      "elapsed_s": 31.09
     },
     {
       "id": "case_005",
@@ -118,7 +121,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona los campos id, origen, destino y nombre de aerolínea de la tabla vuelos (v) y la tabla aerolineas (a). También selecciona el número total de reservas confirmadas (COUNT(r.id)) de la tabla reservas (r), que está relacionada con vuelos a través de la columna vuelo_id. La consulta filtra las reservas confirmadas (r.estado = 'confirmada') y agrupa los resultados por id de vuelo, origen, destino y nombre de aerolínea. Finalmente, ordena los resultados por el número total de reservas confirmadas en orden descendente y limita el resultado a 1. Esta consulta responde exactamente a la pregunta original, incluyendo los campos de origen, destino y aerolínea, y el número total de reservas confirmadas para cada vuelo.",
       "error": null,
-      "elapsed_s": 143.25
+      "elapsed_s": 48.78
     },
     {
       "id": "case_006",
@@ -186,32 +189,29 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona pasajeros chilenos (p.pais_residencia = 'Chile') que realizaron reservas (r.estado = 'confirmada') para vuelos (v) que no tienen como destino (v.destino) el país de residencia del pasajero (p.pais_residencia). La consulta usa JOINs para conectar las tablas de pasajeros, reservas y vuelos. La consulta filtra por pasajeros chilenos y por vuelos con destino diferente al país de residencia del pasajero. La consulta también ordena los resultados por nombre del pasajero y limita el número de resultados a 1000. La pregunta original omite la parte de los vuelos con destino diferente al país de residencia del pasajero, pero la consulta SQL incluye esta parte. La consulta SQL también incluye pasajeros que no son chilenos, lo que no está en la pregunta original.",
       "error": null,
-      "elapsed_s": 161.19
+      "elapsed_s": 65.36
     },
     {
       "id": "case_009",
       "question": "Pasajeros que gastaron más que el precio promedio de todas las reservas confirmadas.",
       "difficulty": "hard",
-      "executed": true,
-      "is_safe": true,
-      "blocked_reason": null,
-      "sql": "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id WHERE r.estado = 'confirmada' GROUP BY p.id, p.nombre HAVING SUM(r.precio_pagado) > (SELECT AVG(precio_pagado) FROM reservas WHERE estado = 'confirmada') ORDER BY total_gastado DESC LIMIT 1000",
-      "confidence_final": 0.6,
-      "judge_score": 3,
-      "inferred_question": "Mostrar los nombres de los pasajeros que gastaron más que el promedio total de todas las reservas confirmadas, junto con el total de dinero gastado por cada pasajero, ordenados por el total de dinero gastado en orden descendente y limitando el resultado a 1000 pasajeros.",
+      "executed": false,
+      "is_safe": false,
+      "blocked_reason": "Fallo en generación de SQL: Timeout al llamar al generador (900s): timed out",
+      "sql": "",
+      "confidence_final": 0.2,
+      "judge_score": 1,
+      "inferred_question": "No evaluable: el generador no produjo SQL.",
       "concerns": [
-        "La consulta SQL no incluye un promedio específico de todas las reservas, sino un promedio específico de todas las reservas confirmadas. La pregunta original buscaba un promedio de todas las reservas, no solo las confirmadas.",
-        "La consulta SQL no incluye el nombre de la tabla 'pasajeros' en la consulta principal, pero se menciona en la consulta JOIN. Esto podría ser un error en la consulta.",
-        "La consulta SQL no incluye un orden de las columnas 'estado' de las reservas en la subconsulta para calcular el promedio. Esto podría ser un error en la consulta.",
-        "La consulta SQL no incluye un orden de las columnas 'estado' de las reservas en la subconsulta para calcular el promedio. Esto podría ser un error en la consulta."
+        "Pipeline detenido antes del juez: Timeout al llamar al generador (900s): timed out"
       ],
-      "results_count": 58,
-      "execution_match": true,
+      "results_count": null,
+      "execution_match": false,
       "adversarial_blocked": null,
       "judge_degraded": false,
-      "judge_reasoning": "La consulta SQL selecciona los nombres de pasajeros (p.nombre) y el total de dinero gastado (SUM(r.precio_pagado) AS total_gastado) de las reservas (r) que están confirmadas (r.estado = 'confirmada'). La consulta hace un JOIN entre las tablas pasajeros (p) y reservas (r) utilizando la columna id de pasajeros y el campo pasajero_id de reservas. La consulta agrupa los resultados por el id de pasajeros y el nombre de pasajeros. La consulta utiliza un subconsulta para calcular el promedio total de dinero gastado por todas las reservas confirmadas. La consulta final filtra los resultados para que solo incluyan los pasajeros que gastaron más que el promedio total y ordena los resultados por el total de dinero gastado en orden descendente. Finalmente, la consulta limita el resultado a 1000 pasajeros. La intención original de la pregunta no se refiere a un promedio específico de todas las reservas, sino a los pasajeros que gastaron más que el promedio total de todas las reservas confirmadas. La consulta SQL no incluye un promedio específico de todas las reservas, sino un promedio específico de todas las reservas confirmadas.",
+      "judge_reasoning": "Generación fallida; no hay SQL que el juez pueda evaluar.",
       "error": null,
-      "elapsed_s": 170.33
+      "elapsed_s": 902.16
     },
     {
       "id": "case_010",
@@ -233,7 +233,7 @@
       "judge_degraded": false,
       "judge_reasoning": "Generación fallida; no hay SQL que el juez pueda evaluar.",
       "error": null,
-      "elapsed_s": 902.11
+      "elapsed_s": 902.21
     },
     {
       "id": "case_011",
@@ -255,7 +255,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona los nombres de los pasajeros (p.nombre) que no aparecen en la subconsulta (SELECT r.pasajero_id FROM reservas r). Esto implica que estos pasajeros no están en la relación reservas. La pregunta original busca los pasajeros que nunca realizaron una reserva, lo que se cumple con esta consulta. Sin embargo, la consulta solo devuelve 1000 registros, lo que podría ser un problema si se necesita más información. La consulta no incluye filtros adicionales ni ordena los resultados.",
       "error": null,
-      "elapsed_s": 149.14
+      "elapsed_s": 157.63
     },
     {
       "id": "case_012",
@@ -264,22 +264,22 @@
       "executed": true,
       "is_safe": true,
       "blocked_reason": null,
-      "sql": "SELECT v.id, v.origen, v.destino, v.fecha FROM vuelos v WHERE NOT EXISTS (SELECT 1 FROM reservas r WHERE r.vuelo_id = v.id AND r.estado = 'confirmada') ORDER BY v.id LIMIT 1000",
+      "sql": "SELECT v.id, v.origen, v.destino, v.fecha, COUNT(r.id) AS total_confirmadas FROM vuelos v LEFT JOIN reservas r ON r.vuelo_id = v.id WHERE v.fecha >= CURRENT_DATE AND v.fecha < CURRENT_DATE + INTERVAL '7 days' GROUP BY v.id, v.origen, v.destino, v.fecha ORDER BY v.fecha, v.id LIMIT 1000",
       "confidence_final": 0.6,
       "judge_score": 3,
-      "inferred_question": "¿Cuáles son los vuelos que no tienen ninguna reserva confirmada?",
+      "inferred_question": "¿Cuáles son los vuelos que no tienen ninguna reserva confirmada para las próximas 7 días?",
       "concerns": [
-        "No incluye filtros adicionales como el origen, destino o fecha del vuelo.",
-        "No ordena por origen, destino o fecha del vuelo.",
-        "No limita la cantidad de resultados a menos de 1000."
+        "LEFT JOIN para incluir todos los vuelos, incluso aquellos que no tienen reservas confirmadas",
+        "La columna total_confirmadas no se utiliza en la consulta final",
+        "Filtro por fechas específicas (fecha >= CURRENT_DATE AND fecha < CURRENT_DATE + INTERVAL '7 days')"
       ],
-      "results_count": 42,
-      "execution_match": true,
+      "results_count": 5,
+      "execution_match": false,
       "adversarial_blocked": null,
       "judge_degraded": false,
-      "judge_reasoning": "La consulta SQL selecciona vuelos (v) que no tienen ninguna reserva confirmada (r) registrada. Esto cubre la intención de la pregunta original de buscar vuelos sin reservas confirmadas. La consulta usa un subquery (SELECT 1 FROM reservas r WHERE r.vuelo_id = v.id AND r.estado = 'confirmada') para verificar si un vuelo tiene una reserva confirmada. La consulta también ordena los resultados por el ID del vuelo y limita la cantidad de resultados a 1000. La consulta no incluye filtros adicionales como el origen, destino o fecha del vuelo, ni ordena por estas columnas. Por lo tanto, la consulta responde a la pregunta original de manera parcialmente alineada.",
+      "judge_reasoning": "La consulta SQL selecciona vuelos (v) que no tienen ninguna reserva confirmada (r.id = NULL) para las fechas comprendidas entre la fecha actual y la fecha actual más 7 días. Esto implica que la consulta está filtrando por fechas específicas y está utilizando un LEFT JOIN para incluir todos los vuelos, incluso aquellos que no tienen reservas confirmadas. La columna total_confirmadas se utiliza para contar las reservas confirmadas, pero en realidad no se utiliza en la consulta final. La consulta también agrupa por vuelo_id, origen, destino y fecha. La ordenación por fecha y vuelo_id se utiliza para limitar los resultados a 1000 vuelos más recientes. La consulta no incluye filtros adicionales sobre los vuelos que no tienen reservas confirmadas.",
       "error": null,
-      "elapsed_s": 150.25
+      "elapsed_s": 165.9
     },
     {
       "id": "case_013",
@@ -301,7 +301,7 @@
       "judge_degraded": false,
       "judge_reasoning": "Generación fallida; no hay SQL que el juez pueda evaluar.",
       "error": null,
-      "elapsed_s": 103.61
+      "elapsed_s": 107.77
     },
     {
       "id": "case_014",
@@ -321,7 +321,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona el nombre del pasajero (p.nombre) y cuenta las reservas (COUNT(r.id)) que están en estado confirmada (WHERE r.estado = 'confirmada'). Luego, agrupa por el ID del pasajero (p.id) y el nombre del pasajero (p.nombre). Finalmente, filtra para incluir solo aquellos pasajeros que tienen más de 2 reservas en estado confirmada (HAVING COUNT(r.id) > 2). La consulta también ordena por el número de reservas en orden descendente y por el nombre del pasajero, y limita los resultados a 1000. Esta consulta responde directamente a la pregunta original, que busca los pasajeros con más de 2 reservas en estado confirmada.",
       "error": null,
-      "elapsed_s": 138.4
+      "elapsed_s": 149.84
     },
     {
       "id": "case_015",
@@ -345,7 +345,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona el total de reservas (COUNT(*)) en la tabla 'reservas'. El filtro WHERE utiliza CURRENT_DATE - INTERVAL '1 month' para seleccionar reservas que ocurrieron en el último mes. Además, el filtro dayofweek(fecha_reserva) IN (0, 6) se utiliza para seleccionar reservas que ocurrieron en fines de semana. Esto cubre la intención de contar reservas realizadas en fines de semana durante el último mes. La consulta no incluye otros filtros o agregaciones que podrían haber sido parte de la pregunta original.",
       "error": null,
-      "elapsed_s": 145.33
+      "elapsed_s": 141.71
     },
     {
       "id": "case_016",
@@ -365,7 +365,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona los vuelos (v) y las reservas (r) que están relacionadas a través de la columna vuelo_id. Se filtran los vuelos que tienen una fecha de salida que es igual o posterior a la fecha actual y menor a la fecha actual más 7 días. Se realiza una agrupación por id, origen, destino y fecha de vuelo. Finalmente, se ordenan los resultados por fecha y id de vuelo y se limitan a 1000 resultados. Esta consulta responde a la intención de mostrar vuelos programados para los próximos 7 días con su cantidad de reservas y fecha.",
       "error": null,
-      "elapsed_s": 157.83
+      "elapsed_s": 167.0
     },
     {
       "id": "case_017",
@@ -374,22 +374,26 @@
       "executed": true,
       "is_safe": true,
       "blocked_reason": null,
-      "sql": "SELECT p.pais_residencia, a.nombre AS aerolinea, SUM(r.precio_pagado) AS ingresos FROM reservas r JOIN pasajeros p ON r.pasajero_id = p.id JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id WHERE r.estado = 'confirmada' GROUP BY p.pais_residencia, a.nombre ORDER BY ingresos DESC LIMIT 1000",
+      "sql": "SELECT p.pais_residencia, a.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id WHERE p.pais_residencia = 'Argentina' AND a.pais = 'España' AND r.estado = 'confirmada' GROUP BY p.id, p.nombre, a.nombre, p.pais_residencia ORDER BY total_gastado DESC LIMIT 1",
       "confidence_final": 0.6,
       "judge_score": 3,
-      "inferred_question": "Muestra el total de ingresos por país de residencia del pasajero y aerolínea, considerando solo reservas confirmadas.",
+      "inferred_question": "Muestra el total de ingresos por país de residencia del pasajero y aerolínea, filtrando por Argentina como país de residencia y España como país de la aerolínea, y agrupa por pasajero y aerolínea.",
       "concerns": [
-        "No incluye detalles como 'id' de 'reservas', 'pasajeros', 'vuelos', y 'aerolineas'.",
-        "No incluye columnas como 'fecha' de 'reservas'.",
-        "No incluye columnas como 'id' de 'pasajeros' y 'aerolineas'."
+        "No se incluyen todos los pasajeros y aerolíneas, solo aquellos que cumplen con los filtros especificados.",
+        "No se incluyen todos los pasajes, solo aquellos que están confirmados.",
+        "No se incluyen todos los países, solo Argentina y España.",
+        "No se incluyen todos los tipos de reservas, solo las que están confirmadas.",
+        "No se incluyen todos los tipos de vuelos, solo los que están confirmados.",
+        "No se incluyen todos los tipos de pasajes, solo los que están confirmados.",
+        "No se incluyen todos los tipos de aerolíneas, solo las que están confirmadas."
       ],
-      "results_count": 30,
-      "execution_match": true,
+      "results_count": 1,
+      "execution_match": false,
       "adversarial_blocked": null,
       "judge_degraded": false,
-      "judge_reasoning": "La consulta SQL selecciona los campos 'pais_residencia' de 'pasajeros', 'nombre' de 'aerolineas', y realiza una suma de 'precio_pagado' de 'reservas'. Se usan los joins 'JOIN pasajeros p ON r.pasajero_id = p.id', 'JOIN vuelos v ON r.vuelo_id = v.id', y 'JOIN aerolineas a ON v.aerolinea_id = a.id'. Se filtra por 'r.estado = 'confirmada''. Finalmente, se agrupa por 'pais_residencia' y 'nombre' y se ordena por 'ingresos' en orden descendente. La consulta omite columnas como 'id' de 'reservas' y 'vuelos', y no incluye columnas como 'id' de 'pasajeros' y 'aerolineas'. La consulta también no incluye columnas como 'fecha' de 'reservas' y 'vuelos'. La consulta responde a la intención de mostrar el total de ingresos por país de residencia del pasajero y aerolínea, pero omite detalles adicionales.",
+      "judge_reasoning": "La consulta SQL selecciona los campos 'pais_residencia', 'nombre' de la tabla 'aerolineas' y realiza una suma de 'precio_pagado' de la tabla 'reservas' agrupando por 'id' de 'pasajeros', 'nombre' de 'aerolineas' y 'pais_residencia'. La consulta filtra por 'pais_residencia' igual a 'Argentina' y 'pais' igual a 'España'. La consulta también ordena por 'total_gastado' en orden descendente y limita el resultado a 1. La consulta cumple con la intención de mostrar el total de ingresos por país de residencia del pasajero y aerolínea, pero no incluye todos los pasajeros ni todas las aerolíneas, solo aquellos que cumplen con los filtros especificados.",
       "error": null,
-      "elapsed_s": 172.58
+      "elapsed_s": 182.34
     },
     {
       "id": "case_018",
@@ -412,7 +416,7 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL busca el pasajero argentino que más gastó en vuelos hacia España. Usa las tablas 'pasajeros' (p), 'reservas' (r), 'vuelos' (v) y 'ciudades' (c). El WHERE filtra por pasajeros de Argentina, vuelos a España y reservas confirmadas. La columna 'precio_pagado' de 'reservas' se suma para obtener el total gastado por cada pasajero. La consulta agrupa por 'id' y 'nombre' de 'pasajeros' y ordena descendente por 'total_gastado'. Finalmente, LIMIT 1 devuelve solo el primer resultado. Esta consulta responde directamente a la pregunta original, pero omite el filtro de 'España' y el orden descendente, lo que podría distorsionar la respuesta.",
       "error": null,
-      "elapsed_s": 144.07
+      "elapsed_s": 162.32
     },
     {
       "id": "case_019",
@@ -459,14 +463,14 @@
       "judge_degraded": false,
       "judge_reasoning": "La consulta SQL selecciona datos de las tablas 'reservas' y 'vuelos'. Usa un JOIN para combinar filas de 'reservas' con filas de 'vuelos' basándose en la columna 'vuelo_id'. El WHERE filtra filas de 'reservas' con el estado 'confirmada' y filtras filas de 'vuelos' con el origen 'Roma'. La columna 'origen' de 'vuelos' se usa para agrupar las filas. La consulta calcula el total de reservas (COUNT(r.id)) y el ingreso total (SUM(r.precio_pagado)) para cada combinación de origen y destino. La columna 'origen' de 'vuelos' se usa para el ORDER BY y el LIMIT 1 para obtener el resultado más reciente. La pregunta original no menciona nada sobre reservas de vuelos ni sobre Roma, pero la consulta SQL está diseñada para obtener información relevante para esa pregunta.",
       "error": null,
-      "elapsed_s": 165.13
+      "elapsed_s": 165.93
     }
   ],
   "patterns": [
     "confianza baja por bloqueo correcto (esperado): case_006, case_007, case_019",
-    "confianza baja por falla real (revisar): case_010, case_013"
+    "confianza baja por falla real (revisar): case_009, case_010, case_013"
   ],
-  "started_at": "2026-08-17T18:42:19.832188+00:00",
-  "finished_at": "2026-08-17T19:39:57.244945+00:00",
-  "total_elapsed_s": 3457.41
+  "started_at": "2026-08-17T14:43:55.644092+00:00",
+  "finished_at": "2026-08-17T15:45:06.396607+00:00",
+  "total_elapsed_s": 3670.69
 }

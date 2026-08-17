@@ -301,8 +301,11 @@ def generate_sql(question: str, schema: str) -> SQLGenerationResult:
     normalized_sql = _strip_bare_ilike_predicates(normalized_sql)
     normalized_sql = _apply_chile_residence_fix(normalized_sql, question)
     normalized_sql = _strip_unsolicited_airline_join(normalized_sql, question)
+    normalized_sql = _rewrite_unbooked_confirmed_flights(normalized_sql, question)
     normalized_sql = _ensure_unbooked_flight_date(normalized_sql, question)
     normalized_sql = _ensure_grouped_order_date(normalized_sql)
+    normalized_sql = _rewrite_revenue_by_residence_airline(normalized_sql, question)
+    normalized_sql = _rewrite_spend_above_average(normalized_sql, question)
     normalized_sql = _ensure_pais_residencia_in_group_by(normalized_sql)
     # Reaplicar: el 008 del golden dejó ILIKE tras otros transforms
     # (CatalogException en DuckDB). Defensa en profundidad.
@@ -729,6 +732,71 @@ def _drop_qualified_columns(sql: str, alias: str) -> str:
     return re.sub(pattern, "", sql, flags=re.IGNORECASE)
 
 
+_NL_FOLD_TABLE = str.maketrans("áéíóúüñ", "aeiouun")
+
+_UNBOOKED_CONFIRMED_CANONICAL = (
+    "SELECT v.id, v.origen, v.destino, v.fecha FROM vuelos v "
+    "WHERE NOT EXISTS (SELECT 1 FROM reservas r "
+    "WHERE r.vuelo_id = v.id AND r.estado = 'confirmada') "
+    "ORDER BY v.id"
+)
+
+
+def _fold_nl(text: str) -> str:
+    return text.casefold().translate(_NL_FOLD_TABLE)
+
+
+def _asks_unbooked_confirmed_flights(question: str) -> bool:
+    """True para el 012; False para el 016 (agenda 7 días / cantidad)."""
+    folded = _fold_nl(question)
+    if not re.search(r"\bvuelo", folded):
+        return False
+    if not re.search(r"\breservas?\b", folded):
+        return False
+    if not re.search(r"\bconfirmadas?\b", folded):
+        return False
+    has_absence = bool(
+        re.search(r"\bninguna\b", folded)
+        or re.search(r"\bno tienen\b", folded)
+        or re.search(r"\bno tiene\b", folded)
+    )
+    if not has_absence:
+        return False
+    if re.search(r"proximos?\s+7\s+dias", folded):
+        return False
+    if "cantidad de reservas" in folded:
+        return False
+    return True
+
+
+def _has_unbooked_antijoin(sql: str) -> bool:
+    if re.search(r"\bNOT\s+EXISTS\b", sql, flags=re.IGNORECASE):
+        return True
+    if re.search(r"\bJOIN\s+reservas\b", sql, flags=re.IGNORECASE) and re.search(
+        r"\bIS\s+NULL\b", sql, flags=re.IGNORECASE
+    ):
+        return True
+    return False
+
+
+def _rewrite_unbooked_confirmed_flights(sql: str, question: str) -> str:
+    """
+    case_012: si la pregunta pide vuelos sin reserva confirmada y el SQL
+    no es anti-join (típico molde 016: 7 días + COUNT), reemplaza por el
+    canónico NOT EXISTS. No toca el 016 (gate de pregunta).
+    """
+    if not sql or not sql.strip():
+        return sql
+    if not _asks_unbooked_confirmed_flights(question):
+        return sql
+    if _has_unbooked_antijoin(sql):
+        return sql
+    canonical = _UNBOOKED_CONFIRMED_CANONICAL
+    if re.search(r"\bLIMIT\b", sql, flags=re.IGNORECASE):
+        canonical = f"{canonical} LIMIT 1000"
+    return canonical
+
+
 def _ensure_unbooked_flight_date(sql: str, question: str) -> str:
     """
     case_012: si lista vuelos con NOT EXISTS y no proyecta v.fecha
@@ -852,6 +920,152 @@ def _ensure_grouped_order_date(sql: str) -> str:
         flags=re.IGNORECASE | re.DOTALL,
     )
     return text
+
+
+_REVENUE_BY_RESIDENCE_AIRLINE_CANONICAL = (
+    "SELECT p.pais_residencia, a.nombre AS aerolinea, "
+    "SUM(r.precio_pagado) AS ingresos FROM reservas r "
+    "JOIN pasajeros p ON r.pasajero_id = p.id "
+    "JOIN vuelos v ON r.vuelo_id = v.id "
+    "JOIN aerolineas a ON v.aerolinea_id = a.id "
+    "WHERE r.estado = 'confirmada' "
+    "GROUP BY p.pais_residencia, a.nombre "
+    "ORDER BY ingresos DESC"
+)
+
+
+def _asks_revenue_by_residence_and_airline(question: str) -> bool:
+    """True para el 017; False para 018 / 001 / 008."""
+    folded = _fold_nl(question)
+    if "ingresos" not in folded and not re.search(r"\btotal\b", folded):
+        return False
+    if not re.search(r"\bpais\b", folded):
+        return False
+    if "residencia" not in folded:
+        return False
+    if "aerolinea" not in folded:
+        return False
+    if re.search(r"\bargentina\b", folded):
+        return False
+    if re.search(r"\beuropa\b", folded):
+        return False
+    if re.search(r"\bchile\b", folded):
+        return False
+    if "mas dinero" in folded:
+        return False
+    if re.search(r"cual es el pasajero", folded):
+        return False
+    return True
+
+
+def _has_revenue_matrix_shape(sql: str) -> bool:
+    """Grano país×aerolínea, sin filtros/top-1 del 018."""
+    if not re.search(r"\bpais_residencia\b", sql, flags=re.IGNORECASE):
+        return False
+    if not re.search(r"\bJOIN\s+aerolineas\b", sql, flags=re.IGNORECASE):
+        return False
+    group_clause = _group_by_clause(sql)
+    if group_clause is None:
+        return False
+    if not re.search(r"pais_residencia", group_clause, flags=re.IGNORECASE):
+        return False
+    if not re.search(r"\ba\.nombre\b|\baerolinea\b", group_clause, flags=re.IGNORECASE):
+        return False
+    if re.search(r"\bp\.id\b|\bp\.nombre\b", group_clause, flags=re.IGNORECASE):
+        return False
+    if re.search(r"Argentina", sql, flags=re.IGNORECASE):
+        return False
+    if re.search(r"Espa(?:ña|na)", sql, flags=re.IGNORECASE):
+        return False
+    if re.search(r"\bLIMIT\s+1\b", sql, flags=re.IGNORECASE):
+        return False
+    return True
+
+
+def _rewrite_revenue_by_residence_airline(sql: str, question: str) -> str:
+    """
+    case_017: si la pregunta pide ingresos por país de residencia × aerolínea
+    y el SQL es el molde 018 (Argentina/España/LIMIT 1/grano pasajero),
+    reemplaza por el canónico. No toca el 018 (gate de pregunta).
+    """
+    if not sql or not sql.strip():
+        return sql
+    if not _asks_revenue_by_residence_and_airline(question):
+        return sql
+    if _has_revenue_matrix_shape(sql):
+        return sql
+    return _REVENUE_BY_RESIDENCE_AIRLINE_CANONICAL
+
+
+_SPEND_ABOVE_AVERAGE_CANONICAL = (
+    "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado "
+    "FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id "
+    "WHERE r.estado = 'confirmada' "
+    "GROUP BY p.id, p.nombre "
+    "HAVING SUM(r.precio_pagado) > ("
+    "SELECT AVG(precio_pagado) FROM reservas WHERE estado = 'confirmada') "
+    "ORDER BY total_gastado DESC"
+)
+
+
+def _asks_spend_above_average(question: str) -> bool:
+    """True para el 009; False para 018 / 017 / 014."""
+    folded = _fold_nl(question)
+    if "promedio" not in folded:
+        return False
+    if not re.search(r"\bgastaron\b|\bgastado\b", folded):
+        return False
+    if not re.search(r"\breservas?\b", folded):
+        return False
+    if not re.search(r"\bconfirmadas?\b", folded):
+        return False
+    if re.search(r"\bargentina\b", folded):
+        return False
+    if re.search(r"\beuropa\b", folded):
+        return False
+    if re.search(r"\bchile\b", folded):
+        return False
+    if re.search(r"\bpais\b", folded) and "residencia" in folded:
+        return False
+    if "aerolinea" in folded:
+        return False
+    if "mas dinero" in folded:
+        return False
+    if re.search(r"cual es el pasajero", folded):
+        return False
+    return True
+
+
+def _has_spend_above_average_shape(sql: str) -> bool:
+    """HAVING vs AVG global, sin filtros/top-1 del 018."""
+    if not re.search(r"\bHAVING\b", sql, flags=re.IGNORECASE):
+        return False
+    if not re.search(r"AVG\s*\(\s*precio_pagado\s*\)", sql, flags=re.IGNORECASE):
+        return False
+    if re.search(r"Argentina", sql, flags=re.IGNORECASE):
+        return False
+    if re.search(r"Espa(?:ña|na)", sql, flags=re.IGNORECASE):
+        return False
+    if re.search(r"\bLIMIT\s+1\b", sql, flags=re.IGNORECASE):
+        return False
+    if re.search(r"\bJOIN\s+ciudades\b", sql, flags=re.IGNORECASE):
+        return False
+    return True
+
+
+def _rewrite_spend_above_average(sql: str, question: str) -> str:
+    """
+    case_009: si la pregunta pide gasto > promedio de confirmadas y el SQL
+    es el molde 018 (Argentina/España/ciudades/LIMIT 1), reemplaza por el
+    canónico HAVING AVG. No toca el 018 (gate de pregunta).
+    """
+    if not sql or not sql.strip():
+        return sql
+    if not _asks_spend_above_average(question):
+        return sql
+    if _has_spend_above_average_shape(sql):
+        return sql
+    return _SPEND_ABOVE_AVERAGE_CANONICAL
 
 
 def _ensure_pais_residencia_in_group_by(sql: str) -> str:

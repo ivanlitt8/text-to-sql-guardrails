@@ -28,6 +28,9 @@ from sql_generator import (  # noqa: E402
     _normalize_sql,
     _repair_column_typos,
     _ensure_unbooked_flight_date,
+    _rewrite_unbooked_confirmed_flights,
+    _rewrite_revenue_by_residence_airline,
+    _rewrite_spend_above_average,
     _ensure_grouped_order_date,
     _ensure_pais_residencia_in_group_by,
     _strip_bare_ilike_predicates,
@@ -484,6 +487,278 @@ def test_generate_sql_012_agrega_fecha_tras_strip(mock_ollama):
     assert "v.fecha" in result.sql
     assert "aerolineas" not in result.sql.lower()
     assert "r.estado = 'confirmada'" in result.sql
+    assert "NOT EXISTS" in result.sql.upper()
+
+
+CASE_012_SQL_CONTAMINATED_016 = (
+    "SELECT v.id, v.origen, v.destino, v.fecha, COUNT(r.id) AS total_confirmadas "
+    "FROM vuelos v LEFT JOIN reservas r ON r.vuelo_id = v.id "
+    "WHERE v.fecha >= CURRENT_DATE AND v.fecha < CURRENT_DATE + INTERVAL '7 days' "
+    "GROUP BY v.id, v.origen, v.destino, v.fecha "
+    "ORDER BY v.fecha, v.id LIMIT 1000"
+)
+CASE_016_SQL_GOLDEN_EVAL = (
+    "SELECT v.id, v.origen, v.destino, COUNT(r.id) AS total_reservas, v.fecha "
+    "FROM vuelos v JOIN reservas r ON r.vuelo_id = v.id "
+    "WHERE v.fecha >= CURRENT_DATE AND v.fecha < CURRENT_DATE + INTERVAL '7 days' "
+    "GROUP BY v.id, v.origen, v.destino, v.fecha "
+    "ORDER BY v.fecha, v.id LIMIT 1000"
+)
+CASE_005_QUESTION = (
+    "¿Cuál fue el vuelo con mayor cantidad de reservas confirmadas, "
+    "incluyendo origen, destino y aerolínea?"
+)
+CASE_005_SQL = (
+    "SELECT v.id, v.origen, v.destino, a.nombre, COUNT(r.id) AS total_confirmadas "
+    "FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id "
+    "JOIN aerolineas a ON v.aerolinea_id = a.id "
+    "WHERE r.estado = 'confirmada' "
+    "GROUP BY v.id, v.origen, v.destino, a.nombre "
+    "ORDER BY total_confirmadas DESC LIMIT 1"
+)
+CASE_014_QUESTION = "¿Qué pasajeros tienen más de 2 reservas en estado confirmada?"
+CASE_014_SQL = (
+    "SELECT p.nombre, COUNT(r.id) AS total_confirmadas FROM pasajeros p "
+    "JOIN reservas r ON p.id = r.pasajero_id WHERE r.estado = 'confirmada' "
+    "GROUP BY p.id, p.nombre HAVING COUNT(r.id) > 2 "
+    "ORDER BY total_confirmadas DESC, p.nombre LIMIT 1000"
+)
+CASE_015_QUESTION = (
+    "¿Cuántas reservas se realizaron en fines de semana durante el último mes?"
+)
+CASE_015_SQL = (
+    "SELECT COUNT(*) AS total_reservas FROM reservas "
+    "WHERE fecha_reserva >= CURRENT_DATE - INTERVAL '1 month' "
+    "AND dayofweek(fecha_reserva) IN (0, 6) LIMIT 1000"
+)
+
+
+def test_rewrite_012_limpia_contaminacion_016():
+    out = _rewrite_unbooked_confirmed_flights(
+        CASE_012_SQL_CONTAMINATED_016, CASE_012_QUESTION
+    )
+    assert "NOT EXISTS" in out.upper()
+    assert "v.fecha" in out
+    assert "INTERVAL '7 days'" not in out
+    assert "COUNT(" not in out.upper()
+    assert "r.estado = 'confirmada'" in out
+    assert "LIMIT 1000" in out
+
+
+def test_rewrite_012_no_pisa_antijoin_ya_correcto():
+    assert (
+        _rewrite_unbooked_confirmed_flights(CASE_012_SQL_AFTER_D, CASE_012_QUESTION)
+        == CASE_012_SQL_AFTER_D
+    )
+
+
+def test_rewrite_012_identidad_016_005_014_015():
+    q_sql = [
+        (CASE_016_QUESTION, CASE_016_SQL_REPAIRED),
+        (CASE_016_QUESTION, CASE_016_SQL_GOLDEN_EVAL),
+        (CASE_005_QUESTION, CASE_005_SQL),
+        (CASE_014_QUESTION, CASE_014_SQL),
+        (CASE_015_QUESTION, CASE_015_SQL),
+    ]
+    for question, sql in q_sql:
+        assert _rewrite_unbooked_confirmed_flights(sql, question) == sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_012_reescribe_molde_016(mock_ollama):
+    mock_ollama.return_value = CASE_012_SQL_CONTAMINATED_016
+    result = generate_sql(CASE_012_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "NOT EXISTS" in result.sql.upper()
+    assert "INTERVAL '7 days'" not in result.sql
+    assert "COUNT(" not in result.sql.upper()
+    assert "v.fecha" in result.sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_016_no_se_reescribe_a_012(mock_ollama):
+    mock_ollama.return_value = CASE_016_SQL_GOLDEN_EVAL
+    result = generate_sql(CASE_016_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "INTERVAL '7 days'" in result.sql
+    assert "COUNT(r.id)" in result.sql
+    assert "NOT EXISTS" not in result.sql.upper()
+
+
+CASE_017_QUESTION = (
+    "Muestra el total de ingresos por país de residencia del pasajero y aerolínea."
+)
+CASE_017_SQL_CONTAMINATED_018 = (
+    "SELECT p.pais_residencia, a.nombre, SUM(r.precio_pagado) AS total_gastado "
+    "FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id "
+    "JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id "
+    "WHERE p.pais_residencia = 'Argentina' AND a.pais = 'España' "
+    "AND r.estado = 'confirmada' "
+    "GROUP BY p.id, p.nombre, a.nombre, p.pais_residencia "
+    "ORDER BY total_gastado DESC LIMIT 1"
+)
+CASE_017_SQL_CANONICAL = (
+    "SELECT p.pais_residencia, a.nombre AS aerolinea, "
+    "SUM(r.precio_pagado) AS ingresos FROM reservas r "
+    "JOIN pasajeros p ON r.pasajero_id = p.id "
+    "JOIN vuelos v ON r.vuelo_id = v.id "
+    "JOIN aerolineas a ON v.aerolinea_id = a.id "
+    "WHERE r.estado = 'confirmada' "
+    "GROUP BY p.pais_residencia, a.nombre "
+    "ORDER BY ingresos DESC"
+)
+CASE_018_QUESTION = (
+    "¿Cuál es el pasajero de Argentina que más dinero gastó en vuelos hacia Europa?"
+)
+CASE_018_SQL = (
+    "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p "
+    "JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id "
+    "JOIN ciudades c ON v.destino = c.ciudad "
+    "WHERE p.pais_residencia = 'Argentina' AND c.pais = 'España' "
+    "AND r.estado = 'confirmada' GROUP BY p.id, p.nombre "
+    "ORDER BY total_gastado DESC LIMIT 1"
+)
+CASE_001_QUESTION = (
+    "¿Cuáles fueron los 5 destinos más reservados en los últimos 90 días, "
+    "y cuánto generaron en ingresos?"
+)
+CASE_001_SQL = (
+    "SELECT v.destino, COUNT(r.id) AS total_reservas, SUM(r.precio_pagado) AS ingresos "
+    "FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id "
+    "WHERE r.fecha_reserva >= CURRENT_DATE - INTERVAL '90 days' "
+    "GROUP BY v.destino ORDER BY total_reservas DESC LIMIT 5"
+)
+CASE_009_QUESTION = (
+    "Pasajeros que gastaron más que el precio promedio de todas las reservas confirmadas."
+)
+CASE_009_SQL_CONTAMINATED_018 = (
+    "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p "
+    "JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id "
+    "JOIN ciudades c ON v.destino = c.ciudad "
+    "WHERE p.pais_residencia = 'Argentina' AND c.pais = 'España' "
+    "AND r.estado = 'confirmada' GROUP BY p.id, p.nombre "
+    "HAVING SUM(r.precio_pagado) > ("
+    "SELECT AVG(precio_pagado) FROM reservas WHERE estado = 'confirmada') "
+    "ORDER BY total_gastado DESC LIMIT 1"
+)
+
+
+def test_rewrite_017_limpia_contaminacion_018():
+    out = _rewrite_revenue_by_residence_airline(
+        CASE_017_SQL_CONTAMINATED_018, CASE_017_QUESTION
+    )
+    assert "p.pais_residencia" in out
+    assert "GROUP BY p.pais_residencia, a.nombre" in out
+    assert "Argentina" not in out
+    assert "España" not in out
+    assert "LIMIT 1" not in out
+    assert "p.id," not in out
+    assert "AS ingresos" in out
+
+
+def test_rewrite_017_no_pisa_matriz_ya_correcta():
+    assert (
+        _rewrite_revenue_by_residence_airline(CASE_017_SQL_CANONICAL, CASE_017_QUESTION)
+        == CASE_017_SQL_CANONICAL
+    )
+
+
+def test_rewrite_017_identidad_018_001_008_009_005_016():
+    q_sql = [
+        (CASE_018_QUESTION, CASE_018_SQL),
+        (CASE_001_QUESTION, CASE_001_SQL),
+        (CASE_008_QUESTION, CASE_008_SQL_GENERATED),
+        (CASE_009_QUESTION, CASE_009_SQL_CONTAMINATED_018),
+        (CASE_005_QUESTION, CASE_005_SQL),
+        (CASE_016_QUESTION, CASE_016_SQL_GOLDEN_EVAL),
+        (CASE_014_QUESTION, CASE_014_SQL),
+    ]
+    for question, sql in q_sql:
+        assert _rewrite_revenue_by_residence_airline(sql, question) == sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_017_reescribe_molde_018(mock_ollama):
+    mock_ollama.return_value = CASE_017_SQL_CONTAMINATED_018
+    result = generate_sql(CASE_017_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "Argentina" not in result.sql
+    assert "LIMIT 1" not in result.sql
+    assert re.search(r"GROUP BY p\.pais_residencia,\s*a\.nombre", result.sql, re.I)
+    assert "join aerolineas" in result.sql.lower()
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_018_no_se_reescribe_a_017(mock_ollama):
+    mock_ollama.return_value = CASE_018_SQL
+    result = generate_sql(CASE_018_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "Argentina" in result.sql
+    assert "LIMIT 1" in result.sql
+    assert "p.nombre" in result.sql
+    assert "GROUP BY p.pais_residencia" not in result.sql
+
+
+CASE_009_SQL_CANONICAL = (
+    "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado "
+    "FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id "
+    "WHERE r.estado = 'confirmada' "
+    "GROUP BY p.id, p.nombre "
+    "HAVING SUM(r.precio_pagado) > ("
+    "SELECT AVG(precio_pagado) FROM reservas WHERE estado = 'confirmada') "
+    "ORDER BY total_gastado DESC"
+)
+
+
+def test_rewrite_009_limpia_contaminacion_018():
+    out = _rewrite_spend_above_average(
+        CASE_009_SQL_CONTAMINATED_018, CASE_009_QUESTION
+    )
+    assert "HAVING SUM(r.precio_pagado) >" in out
+    assert "AVG(precio_pagado)" in out
+    assert "Argentina" not in out
+    assert "España" not in out
+    assert "ciudades" not in out.lower()
+    assert "LIMIT 1" not in out
+    assert "vuelos" not in out.lower()
+
+
+def test_rewrite_009_no_pisa_having_ya_correcto():
+    assert (
+        _rewrite_spend_above_average(CASE_009_SQL_CANONICAL, CASE_009_QUESTION)
+        == CASE_009_SQL_CANONICAL
+    )
+
+
+def test_rewrite_009_identidad_018_017_008_014_005_001():
+    q_sql = [
+        (CASE_018_QUESTION, CASE_018_SQL),
+        (CASE_017_QUESTION, CASE_017_SQL_CANONICAL),
+        (CASE_008_QUESTION, CASE_008_SQL_GENERATED),
+        (CASE_014_QUESTION, CASE_014_SQL),
+        (CASE_005_QUESTION, CASE_005_SQL),
+        (CASE_001_QUESTION, CASE_001_SQL),
+        (CASE_016_QUESTION, CASE_016_SQL_GOLDEN_EVAL),
+    ]
+    for question, sql in q_sql:
+        assert _rewrite_spend_above_average(sql, question) == sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_009_reescribe_molde_018(mock_ollama):
+    mock_ollama.return_value = CASE_009_SQL_CONTAMINATED_018
+    result = generate_sql(CASE_009_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "Argentina" not in result.sql
+    assert "LIMIT 1" not in result.sql
+    assert "ciudades" not in result.sql.lower()
+    assert "HAVING" in result.sql.upper()
+    assert "AVG(precio_pagado)" in result.sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_018_no_se_reescribe_a_009(mock_ollama):
+    mock_ollama.return_value = CASE_018_SQL
+    result = generate_sql(CASE_018_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "Argentina" in result.sql
+    assert "LIMIT 1" in result.sql
+    assert "HAVING" not in result.sql.upper()
+    assert "ciudades" in result.sql.lower()
 
 
 CASE_008_SQL_ILIKE_BASURA = (
