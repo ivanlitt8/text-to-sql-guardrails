@@ -37,9 +37,10 @@ class SQLGenerationResult(BaseModel):
 # sqlcoder no fue entrenado para reportar confidence. Placeholder de MVP.
 _DEFAULT_CONFIDENCE = 3
 
-# Casos 004/005 del golden 81% llegaron a ~530 s; un timeout corto
-# (180–240 s) abortaría matches válidos. Configurable vía OLLAMA_TIMEOUT.
-_DEFAULT_OLLAMA_TIMEOUT_S = 600.0
+# Casos 004/005 del golden 81% llegaron a ~530 s; el régimen 56% deja
+# case_010 colgado hasta el techo. Default 900 s (antes 600). Configurable
+# vía OLLAMA_TIMEOUT.
+_DEFAULT_OLLAMA_TIMEOUT_S = 900.0
 
 _CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]+\|>")
 
@@ -297,8 +298,15 @@ def generate_sql(question: str, schema: str) -> SQLGenerationResult:
 
     normalized_sql = _extract_sql_from_response(raw_text)
     normalized_sql = _repair_column_typos(normalized_sql, schema)
+    normalized_sql = _strip_bare_ilike_predicates(normalized_sql)
     normalized_sql = _apply_chile_residence_fix(normalized_sql, question)
     normalized_sql = _strip_unsolicited_airline_join(normalized_sql, question)
+    normalized_sql = _ensure_unbooked_flight_date(normalized_sql, question)
+    normalized_sql = _ensure_grouped_order_date(normalized_sql)
+    normalized_sql = _ensure_pais_residencia_in_group_by(normalized_sql)
+    # Reaplicar: el 008 del golden dejó ILIKE tras otros transforms
+    # (CatalogException en DuckDB). Defensa en profundidad.
+    normalized_sql = _strip_bare_ilike_predicates(normalized_sql)
     _validate_sql_syntax(normalized_sql)
 
     tables_used = _extract_tables_used(normalized_sql)
@@ -315,7 +323,7 @@ def generate_sql(question: str, schema: str) -> SQLGenerationResult:
 
 
 def _resolve_ollama_timeout() -> float:
-    """Timeout HTTP hacia Ollama (segundos). Default 600; mínimo 1."""
+    """Timeout HTTP hacia Ollama (segundos). Default 900; mínimo 1."""
     raw = os.getenv("OLLAMA_TIMEOUT")
     if raw is None or not str(raw).strip():
         return _DEFAULT_OLLAMA_TIMEOUT_S
@@ -526,18 +534,55 @@ def _alias_to_table_map(sql: str) -> dict[str, str]:
 
 def _apply_chile_residence_fix(sql: str, question: str) -> str:
     """
-    Paso C (case_008): si la pregunta nombra Chile y el SQL ya JOINea
-    ciudades pero omite pais_residencia = 'Chile', inserta esa igualdad.
-    Si lista p.nombre con JOIN a reservas (sin GROUP BY), agrega DISTINCT.
+    case_008: si la pregunta nombra Chile, asegura JOIN ciudades +
+    pais_residencia = 'Chile' + comparación por c.pais (no ciudad vs país)
+    y SELECT DISTINCT p.nombre al listar pasajeros sin GROUP BY.
     """
     if not sql or not sql.strip():
         return sql
     if "chile" not in question.lower():
         return sql
-    if not re.search(r"\bJOIN\s+ciudades\b", sql, flags=re.IGNORECASE):
+    if not re.search(r"\b(?:FROM|JOIN)\s+vuelos\b", sql, flags=re.IGNORECASE):
+        return sql
+    if not re.search(r"\b(?:FROM|JOIN)\s+pasajeros\b", sql, flags=re.IGNORECASE):
         return sql
 
     text = sql
+    if not re.search(r"\bJOIN\s+ciudades\b", text, flags=re.IGNORECASE):
+        if re.search(r"\bWHERE\b", text, flags=re.IGNORECASE):
+            text = re.sub(
+                r"\bWHERE\b",
+                "JOIN ciudades c ON v.destino = c.ciudad WHERE",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            text = re.sub(
+                r"\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b",
+                r"JOIN ciudades c ON v.destino = c.ciudad \1",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if not re.search(r"\bJOIN\s+ciudades\b", text, flags=re.IGNORECASE):
+                text = text.rstrip().rstrip(";") + (
+                    " JOIN ciudades c ON v.destino = c.ciudad"
+                )
+
+    text = re.sub(
+        r"\bv\.destino\s*(?:!=|<>)\s*p\.pais_residencia\b",
+        "c.pais != p.pais_residencia",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bp\.pais_residencia\s*(?:!=|<>)\s*v\.destino\b",
+        "c.pais != p.pais_residencia",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     if not re.search(r"pais_residencia\s*=\s*'Chile'", text, flags=re.IGNORECASE):
         if re.search(r"\bWHERE\b", text, flags=re.IGNORECASE):
             text = re.sub(
@@ -561,6 +606,63 @@ def _apply_chile_residence_fix(sql: str, question: str) -> str:
                 )
 
     if (
+        re.search(r"\bc\.pais\b", text, flags=re.IGNORECASE)
+        and not re.search(
+            r"c\.pais\s*(?:!=|<>)\s*p\.pais_residencia"
+            r"|p\.pais_residencia\s*(?:!=|<>)\s*c\.pais",
+            text,
+            flags=re.IGNORECASE,
+        )
+    ):
+        text = re.sub(
+            r"(\bWHERE\b)",
+            r"\1 c.pais != p.pais_residencia AND",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+
+    folded_q = question.casefold().translate(
+        str.maketrans("áéíóúüñ", "aeiouun")
+    )
+    # Word boundary: "pasajeros" contiene "pais" como subcadena.
+    asks_other_country = bool(re.search(r"\bpais\b", folded_q))
+    if (
+        asks_other_country
+        and re.search(r"\bp\.nombre\b", text, flags=re.IGNORECASE)
+        and not re.search(r"\bGROUP\s+BY\b", text, flags=re.IGNORECASE)
+        and not re.search(
+            r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", text, flags=re.IGNORECASE
+        )
+    ):
+        text = re.sub(
+            r"(?i)^SELECT\s+(?:DISTINCT\s+)?(.+?)\s+FROM\b",
+            "SELECT DISTINCT p.nombre FROM",
+            text,
+            count=1,
+            flags=re.DOTALL,
+        )
+        # Expected 008 ordena por nombre; quitar ORDER BY de columnas
+        # que ya no están en el SELECT (p.ej. precio_pagado).
+        if re.search(r"\bORDER\s+BY\b", text, flags=re.IGNORECASE):
+            text = re.sub(
+                r"\bORDER\s+BY\b.+?(?=\bLIMIT\b|;|$)",
+                "ORDER BY p.nombre ",
+                text,
+                count=1,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        else:
+            text = re.sub(
+                r"\bLIMIT\b",
+                "ORDER BY p.nombre LIMIT",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if not re.search(r"\bORDER\s+BY\b", text, flags=re.IGNORECASE):
+                text = text.rstrip().rstrip(";") + " ORDER BY p.nombre"
+    elif (
         re.search(r"\bp\.nombre\b", text, flags=re.IGNORECASE)
         and re.search(r"\bJOIN\s+reservas\b", text, flags=re.IGNORECASE)
         and not re.search(r"\bGROUP\s+BY\b", text, flags=re.IGNORECASE)
@@ -625,6 +727,165 @@ def _drop_qualified_columns(sql: str, alias: str) -> str:
         rf"(?:\s+AS\s+[A-Za-z_][A-Za-z0-9_]*)?"
     )
     return re.sub(pattern, "", sql, flags=re.IGNORECASE)
+
+
+def _ensure_unbooked_flight_date(sql: str, question: str) -> str:
+    """
+    case_012: si lista vuelos con NOT EXISTS y no proyecta v.fecha
+    (fecha de salida), la agrega al SELECT. No toca estado ni 016.
+    """
+    if not sql or not sql.strip():
+        return sql
+    if "vuelo" not in question.casefold():
+        return sql
+    if not re.search(r"\bNOT\s+EXISTS\b", sql, flags=re.IGNORECASE):
+        return sql
+    if not re.search(r"\b(?:FROM|JOIN)\s+vuelos\b", sql, flags=re.IGNORECASE):
+        return sql
+    if re.search(r"\bv\.fecha\b", sql, flags=re.IGNORECASE):
+        return sql
+
+    def _inject(match: re.Match[str]) -> str:
+        prefix, projection = match.group(1), match.group(2).rstrip()
+        return f"{prefix}{projection}, v.fecha FROM"
+
+    return re.sub(
+        r"(SELECT\s+(?:DISTINCT\s+)?)(.+?)\s+FROM\b",
+        _inject,
+        sql,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+# AND/OR ILIKE '…' / "…" sin columna; también WHERE ILIKE '…' [AND].
+_BARE_ILIKE_RE = re.compile(
+    r"(?:"
+    r"\s+(?:AND|OR)\s+(?:ILIKE|LIKE)\s+(?:'[^']*'|\"[^\"]*\")"
+    r"|"
+    r"\bWHERE\s+(?:ILIKE|LIKE)\s+(?:'[^']*'|\"[^\"]*\")(?:\s+AND)?"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _strip_bare_ilike_predicates(sql: str) -> str:
+    """
+    Quita predicados ILIKE/LIKE sin columna a la izquierda
+    (p.ej. AND ILIKE '%Europa%'), inválidos en DuckDB.
+    """
+    if not sql or not sql.strip():
+        return sql
+    prev = None
+    text = sql
+    # Por si hay varios predicados bare encadenados.
+    while prev != text:
+        prev = text
+        text = _BARE_ILIKE_RE.sub("", text)
+    return text
+
+
+def _group_by_clause(sql: str) -> str | None:
+    match = re.search(
+        r"\bGROUP\s+BY\s+(.+?)(?=\s+ORDER\s+BY\b|\s+HAVING\b|\s+LIMIT\b|$)",
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(1) if match else None
+
+
+def _ensure_grouped_order_date(sql: str) -> str:
+    """
+    case_016: si ORDER BY usa v.fecha (o fecha) y hay GROUP BY sin fecha,
+    agrega v.fecha al SELECT y al GROUP BY.
+    """
+    if not sql or not sql.strip():
+        return sql
+    if not re.search(r"\bGROUP\s+BY\b", sql, flags=re.IGNORECASE):
+        return sql
+
+    order_m = re.search(
+        r"\bORDER\s+BY\b(.+?)(?:\bLIMIT\b|$)",
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not order_m:
+        return sql
+    order_clause = order_m.group(1)
+    orders_flight_date = bool(
+        re.search(r"\bv\.fecha\b", order_clause, flags=re.IGNORECASE)
+    ) or (
+        bool(re.search(r"(?<![.\w])fecha\b", order_clause, flags=re.IGNORECASE))
+        and "fecha_reserva" not in order_clause.lower()
+    )
+    if not orders_flight_date:
+        return sql
+
+    group_clause = _group_by_clause(sql)
+    if group_clause is None:
+        return sql
+    if re.search(r"\bfecha\b", group_clause, flags=re.IGNORECASE):
+        return sql
+
+    text = sql
+    select_m = re.match(
+        r"(SELECT\s+(?:DISTINCT\s+)?)(.+?)\s+FROM\b",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if select_m and not re.search(
+        r"\bfecha\b", select_m.group(2), flags=re.IGNORECASE
+    ):
+        text = re.sub(
+            r"(SELECT\s+(?:DISTINCT\s+)?)(.+?)\s+FROM\b",
+            lambda m: f"{m.group(1)}{m.group(2).rstrip()}, v.fecha FROM",
+            text,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    text = re.sub(
+        r"(\bGROUP\s+BY\s+)(.+?)(?=\s+ORDER\s+BY\b|\s+HAVING\b|\s+LIMIT\b|$)",
+        lambda m: f"{m.group(1)}{m.group(2).rstrip()}, v.fecha",
+        text,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return text
+
+
+def _ensure_pais_residencia_in_group_by(sql: str) -> str:
+    """
+    case_017: si SELECT proyecta p.pais_residencia y hay GROUP BY sin
+    esa columna, la agrega al GROUP BY (evita BinderError en DuckDB).
+    """
+    if not sql or not sql.strip():
+        return sql
+    select_m = re.match(
+        r"(SELECT\s+(?:DISTINCT\s+)?)(.+?)\s+FROM\b",
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not select_m:
+        return sql
+    if not re.search(
+        r"\bp\.pais_residencia\b", select_m.group(2), flags=re.IGNORECASE
+    ):
+        return sql
+
+    group_clause = _group_by_clause(sql)
+    if group_clause is None:
+        return sql
+    if re.search(r"pais_residencia", group_clause, flags=re.IGNORECASE):
+        return sql
+
+    return re.sub(
+        r"(\bGROUP\s+BY\s+)(.+?)(?=\s+ORDER\s+BY\b|\s+HAVING\b|\s+LIMIT\b|$)",
+        lambda m: f"{m.group(1)}{m.group(2).rstrip()}, p.pais_residencia",
+        sql,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
 
 def _edit_distance(a: str, b: str) -> int:

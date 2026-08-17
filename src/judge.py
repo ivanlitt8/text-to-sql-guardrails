@@ -165,11 +165,11 @@ def _resolve_ollama_timeout() -> float:
     """Timeout HTTP hacia Ollama (segundos). Alineado al generador."""
     raw = os.getenv("OLLAMA_TIMEOUT")
     if raw is None or not str(raw).strip():
-        return 600.0
+        return 900.0
     try:
         value = float(str(raw).strip())
     except ValueError:
-        return 600.0
+        return 900.0
     return max(1.0, value)
 
 

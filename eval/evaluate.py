@@ -23,7 +23,7 @@ Paralelización:
   OLLAMA_NUM_PARALLEL=2 para evitar swap de modelos (sqlcoder / qwen)
   en VRAM cuando hay workers concurrentes.
 
-  OLLAMA_TIMEOUT (segundos, default 600) aplica a generador y juez para
+  OLLAMA_TIMEOUT (segundos, default 900) aplica a generador y juez para
   que un cuelgue de Ollama no deje el eval bloqueado sin fin. No usar
   valores < 530 si se quiere cubrir los casos más lentos del golden.
 
@@ -175,7 +175,8 @@ def main() -> int:
     print(
         "Nota Ollama: OLLAMA_MAX_LOADED_MODELS=2 y OLLAMA_NUM_PARALLEL=2 "
         "recomendados para evitar swap de modelos en VRAM. "
-        "OLLAMA_TIMEOUT default 600s (casos lentos del golden ~530s)."
+        "OLLAMA_TIMEOUT default 900s (casos lentos del golden ~530s; "
+        "timeouts duros del generador pedían más techo)."
     )
     print("-" * 60)
 

@@ -27,6 +27,10 @@ from sql_generator import (  # noqa: E402
     _apply_chile_residence_fix,
     _normalize_sql,
     _repair_column_typos,
+    _ensure_unbooked_flight_date,
+    _ensure_grouped_order_date,
+    _ensure_pais_residencia_in_group_by,
+    _strip_bare_ilike_predicates,
     _strip_unsolicited_airline_join,
     _resolve_ollama_timeout,
     _validate_sql_syntax,
@@ -204,7 +208,7 @@ def test_generate_sql_aplica_repair_de_typos(mock_ollama):
 
 def test_resolve_ollama_timeout_default(monkeypatch):
     monkeypatch.delenv("OLLAMA_TIMEOUT", raising=False)
-    assert _resolve_ollama_timeout() == 600.0
+    assert _resolve_ollama_timeout() == 900.0
 
 
 def test_resolve_ollama_timeout_env(monkeypatch):
@@ -238,8 +242,30 @@ CASE_016_SQL_REPAIRED = (
 def test_chile_fix_inserta_igualdad_y_distinct():
     out = _apply_chile_residence_fix(CASE_008_SQL_GENERATED, CASE_008_QUESTION)
     assert "p.pais_residencia = 'Chile'" in out
-    assert "p.pais_residencia != c.pais" in out
+    assert re.search(
+        r"c\.pais\s*!=\s*p\.pais_residencia|p\.pais_residencia\s*!=\s*c\.pais",
+        out,
+        flags=re.IGNORECASE,
+    )
     assert out.upper().startswith("SELECT DISTINCT")
+    assert "join ciudades" in out.lower()
+
+
+def test_chile_fix_inyecta_ciudades_sin_join():
+    sql = (
+        "SELECT p.nombre, v.origen, v.destino, r.precio_pagado FROM pasajeros p "
+        "JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id "
+        "WHERE p.pais_residencia = 'Chile' AND v.destino != p.pais_residencia "
+        "AND r.estado = 'confirmada' ORDER BY r.precio_pagado DESC LIMIT 1000"
+    )
+    out = _apply_chile_residence_fix(sql, CASE_008_QUESTION)
+    assert re.search(r"JOIN\s+ciudades\s+c\s+ON\s+v\.destino\s*=\s*c\.ciudad", out, re.I)
+    assert "c.pais != p.pais_residencia" in out
+    assert "v.destino != p.pais_residencia" not in out
+    assert out.upper().startswith("SELECT DISTINCT P.NOMBRE")
+    assert "v.origen" not in out
+    assert "ORDER BY p.nombre" in out
+    assert "precio_pagado" not in out
 
 
 def test_chile_fix_identidad_casos_ajenos():
@@ -282,6 +308,19 @@ def test_generate_sql_aplica_chile_fix(mock_ollama):
     result = generate_sql(CASE_008_QUESTION, FULL_SCHEMA_SNIPPET)
     assert "p.pais_residencia = 'Chile'" in result.sql
     assert result.sql.upper().startswith("SELECT DISTINCT")
+    assert "join ciudades" in result.sql.lower()
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_008_sin_ciudades_completo(mock_ollama):
+    mock_ollama.return_value = CASE_008_SQL_ILIKE_BASURA
+    result = generate_sql(CASE_008_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "ILIKE" not in result.sql.upper()
+    assert "join ciudades" in result.sql.lower()
+    assert "c.pais != p.pais_residencia" in result.sql
+    assert result.sql.upper().startswith("SELECT DISTINCT P.NOMBRE")
+    assert "ORDER BY p.nombre" in result.sql
+    assert "precio_pagado" not in result.sql
 
 
 CASE_012_QUESTION = "¿Qué vuelos no tienen ninguna reserva confirmada registrada?"
@@ -378,6 +417,179 @@ def test_generate_sql_aplica_airline_strip(mock_ollama):
     result = generate_sql(CASE_012_QUESTION, FULL_SCHEMA_SNIPPET)
     assert "aerolineas" not in result.sql.lower()
     assert "NOT EXISTS" in result.sql.upper()
+
+
+CASE_012_SQL_AFTER_D = (
+    "SELECT v.id, v.origen, v.destino FROM vuelos v "
+    "WHERE NOT EXISTS (SELECT 1 FROM reservas r WHERE r.vuelo_id = v.id "
+    "AND r.estado = 'confirmada') ORDER BY v.id LIMIT 1000"
+)
+
+
+def test_flight_date_012_inyecta_fecha_de_salida():
+    out = _ensure_unbooked_flight_date(CASE_012_SQL_AFTER_D, CASE_012_QUESTION)
+    assert "v.fecha" in out
+    assert "NOT EXISTS" in out.upper()
+    assert "r.estado = 'confirmada'" in out
+    assert out.upper().count("SELECT") == 2
+
+
+def test_flight_date_identidad_casos_ajenos():
+    q_sql = [
+        (
+            "¿Cuál es el precio promedio de los vuelos por aerolínea?",
+            "SELECT a.nombre AS aerolinea, AVG(v.precio) AS precio_promedio "
+            "FROM vuelos v JOIN aerolineas a ON v.aerolinea_id = a.id "
+            "GROUP BY a.nombre",
+        ),
+        (
+            "¿Cuál fue el vuelo con mayor cantidad de reservas confirmadas, "
+            "incluyendo origen, destino y aerolínea?",
+            "SELECT v.id, v.origen, v.destino, a.nombre, COUNT(r.id) AS total_confirmadas "
+            "FROM reservas r JOIN vuelos v ON r.vuelo_id = v.id "
+            "JOIN aerolineas a ON v.aerolinea_id = a.id "
+            "WHERE r.estado = 'confirmada' "
+            "GROUP BY v.id, v.origen, v.destino, a.nombre "
+            "ORDER BY total_confirmadas DESC LIMIT 1",
+        ),
+        (CASE_008_QUESTION, CASE_008_SQL_GENERATED),
+        (
+            "¿Qué pasajeros registrados nunca han realizado una reserva?",
+            "SELECT p.nombre FROM pasajeros p WHERE id NOT IN "
+            "(SELECT r.pasajero_id FROM reservas r) ORDER BY p.nombre",
+        ),
+        (
+            "¿Qué destinos tienen más de 3 vuelos asignados y un precio medio superior a 200?",
+            "SELECT destino, COUNT(*) AS total_vuelos, AVG(precio) AS precio_medio "
+            "FROM vuelos GROUP BY destino HAVING COUNT(*) > 3 AND AVG(precio) > 200 "
+            "ORDER BY destino",
+        ),
+        (CASE_016_QUESTION, CASE_016_SQL_REPAIRED),
+        (
+            "Muestra el total de ingresos por país de residencia del pasajero y aerolínea.",
+            "SELECT p.pais_residencia, a.nombre AS aerolinea, SUM(r.precio_pagado) AS ingresos "
+            "FROM reservas r JOIN pasajeros p ON r.pasajero_id = p.id "
+            "JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id "
+            "WHERE r.estado = 'confirmada' GROUP BY p.pais_residencia, a.nombre",
+        ),
+    ]
+    for question, sql in q_sql:
+        assert _ensure_unbooked_flight_date(sql, question) == sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_012_agrega_fecha_tras_strip(mock_ollama):
+    mock_ollama.return_value = CASE_012_SQL_GENERATED
+    result = generate_sql(CASE_012_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "v.fecha" in result.sql
+    assert "aerolineas" not in result.sql.lower()
+    assert "r.estado = 'confirmada'" in result.sql
+
+
+CASE_008_SQL_ILIKE_BASURA = (
+    "SELECT p.nombre, v.origen, v.destino, r.precio_pagado FROM pasajeros p "
+    "JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id "
+    "WHERE p.pais_residencia = 'Chile' AND v.destino != p.pais_residencia "
+    "AND r.estado = 'confirmada' AND ILIKE '%Europa%'\n"
+    "ORDER BY r.precio_pagado DESC NULLS LAST LIMIT 1000"
+)
+CASE_016_SQL_BINDER = (
+    "SELECT v.id, v.origen, v.destino, COUNT(r.id) AS total_reservas "
+    "FROM vuelos v JOIN reservas r ON r.vuelo_id = v.id "
+    "WHERE v.fecha >= CURRENT_DATE AND v.fecha < CURRENT_DATE + INTERVAL '7 days' "
+    "GROUP BY v.id, v.origen, v.destino ORDER BY v.fecha, v.id LIMIT 1000"
+)
+CASE_017_SQL_BINDER = (
+    "SELECT p.pais_residencia, a.nombre, SUM(r.precio_pagado) AS total_gastado "
+    "FROM pasajeros p JOIN reservas r ON p.id = r.pasajero_id "
+    "JOIN vuelos v ON r.vuelo_id = v.id JOIN aerolineas a ON v.aerolinea_id = a.id "
+    "WHERE p.pais_residencia = 'Argentina' AND a.pais = 'España' "
+    "AND r.estado = 'confirmada' GROUP BY p.id, p.nombre, a.nombre "
+    "ORDER BY total_gastado DESC LIMIT 1"
+)
+
+
+def test_strip_bare_ilike_quita_europa():
+    out = _strip_bare_ilike_predicates(CASE_008_SQL_ILIKE_BASURA)
+    assert "ILIKE" not in out.upper()
+    assert "Europa" not in out
+    assert "p.pais_residencia = 'Chile'" in out
+    assert "r.estado = 'confirmada'" in out
+
+
+def test_strip_bare_ilike_comillas_dobles_y_post_chile():
+    sql = (
+        "SELECT DISTINCT p.nombre FROM pasajeros p "
+        "JOIN reservas r ON p.id = r.pasajero_id "
+        "JOIN vuelos v ON r.vuelo_id = v.id "
+        "JOIN ciudades c ON v.destino = c.ciudad "
+        "WHERE p.pais_residencia = 'Chile' AND c.pais != p.pais_residencia "
+        "AND r.estado = 'confirmada' AND ILIKE \"%Europa%\"\n"
+        "ORDER BY p.nombre LIMIT 1000"
+    )
+    out = _strip_bare_ilike_predicates(sql)
+    assert "ILIKE" not in out.upper()
+    assert "Europa" not in out
+    assert "JOIN ciudades" in out
+    assert "ORDER BY p.nombre" in out
+
+
+def test_strip_bare_ilike_identidad_like_bien_formado():
+    sql = "SELECT * FROM pasajeros WHERE nombre LIKE 'A%'"
+    assert _strip_bare_ilike_predicates(sql) == sql
+
+
+def test_grouped_order_date_016_inyecta_fecha():
+    out = _ensure_grouped_order_date(CASE_016_SQL_BINDER)
+    assert "v.fecha" in out
+    assert re.search(
+        r"GROUP\s+BY\s+v\.id,\s*v\.origen,\s*v\.destino,\s*v\.fecha",
+        out,
+        flags=re.IGNORECASE,
+    )
+    assert "ORDER BY v.fecha" in out
+
+
+def test_grouped_order_date_identidad_sin_order_fecha():
+    sql = (
+        "SELECT a.nombre, AVG(v.precio) AS precio_promedio "
+        "FROM vuelos v JOIN aerolineas a ON v.aerolinea_id = a.id "
+        "GROUP BY a.nombre"
+    )
+    assert _ensure_grouped_order_date(sql) == sql
+
+
+def test_pais_residencia_in_group_by_017():
+    out = _ensure_pais_residencia_in_group_by(CASE_017_SQL_BINDER)
+    assert re.search(
+        r"GROUP\s+BY\s+p\.id,\s*p\.nombre,\s*a\.nombre,\s*p\.pais_residencia",
+        out,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_pais_residencia_identidad_018():
+    sql = (
+        "SELECT p.nombre, SUM(r.precio_pagado) AS total_gastado FROM pasajeros p "
+        "JOIN reservas r ON p.id = r.pasajero_id JOIN vuelos v ON r.vuelo_id = v.id "
+        "JOIN ciudades c ON v.destino = c.ciudad "
+        "WHERE p.pais_residencia = 'Argentina' AND c.pais = 'España' "
+        "AND r.estado = 'confirmada' GROUP BY p.id, p.nombre "
+        "ORDER BY total_gastado DESC LIMIT 1"
+    )
+    assert _ensure_pais_residencia_in_group_by(sql) == sql
+
+
+@patch("sql_generator._call_ollama")
+def test_generate_sql_pipeline_ilike_y_group_by(mock_ollama):
+    mock_ollama.return_value = CASE_008_SQL_ILIKE_BASURA
+    result = generate_sql(CASE_008_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "ILIKE" not in result.sql.upper()
+
+    mock_ollama.return_value = CASE_016_SQL_BINDER
+    result16 = generate_sql(CASE_016_QUESTION, FULL_SCHEMA_SNIPPET)
+    assert "v.fecha" in result16.sql
+    assert re.search(r"GROUP\s+BY.*,\s*v\.fecha", result16.sql, flags=re.I)
 
 
 def test_validate_sql_acepta_select_valido():
