@@ -63,6 +63,7 @@ cd data && python3 generate_seed_data.py
 text2sql-vuelos/
 ├── data/                   # Schema, datos sintéticos y generador
 ├── src/                    # Código fuente (ver docs/SPECS.md sección 9)
+├── frontend/               # Demo React + Vite (SPECS §10)
 ├── eval/                   # Golden dataset para evaluación
 ├── tests/                  # Tests unitarios
 ├── docs/
@@ -86,11 +87,13 @@ uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
 
 - `GET /v1/health` — proceso vivo
 - `GET /v1/ready` — DuckDB + Ollama + modelos
+- `GET /v1/schema` — tablas, columnas, hints y sugerencias (sin Ollama)
 - `POST /v1/ask` — `{ "question": "…" }` → `FinalResponse` (puede tardar minutos)
 
 ```bash
 curl http://127.0.0.1:8000/v1/health
 curl http://127.0.0.1:8000/v1/ready
+curl http://127.0.0.1:8000/v1/schema
 curl -X POST http://127.0.0.1:8000/v1/ask \
   -H "Content-Type: application/json" \
   -d "{\"question\": \"¿Cuántos vuelos hay con destino a Madrid?\"}"
@@ -98,7 +101,29 @@ curl -X POST http://127.0.0.1:8000/v1/ask \
 
 Docs interactivas: http://127.0.0.1:8000/docs
 
+CORS: el origen del frontend se configura con `FRONTEND_ORIGIN` (default
+`http://127.0.0.1:5173` y `http://localhost:5173`).
+
+## Frontend (Vite + React)
+
+Dos procesos: la API y el dev server.
+
+```bash
+uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+```
+
+```bash
+cd frontend
+cp .env.example .env   # VITE_API_URL=http://127.0.0.1:8000
+npm install
+npm run dev            # http://127.0.0.1:5173
+```
+
+El timeout de `POST /v1/ask` en el cliente es 900s (`VITE_ASK_TIMEOUT_MS`).
+Las sugerencias de pregunta salen de `/v1/schema`; no se listan casos del
+golden dataset.
+
 ## Estado actual
 
-Pipeline CLI + API HTTP. Golden ~87.5% (ver `docs/HISTORY.md`).
-Frontend todavía fuera de alcance (SPECS §2).
+Pipeline CLI + API HTTP (`/v1/health`, `/v1/ready`, `/v1/schema`, `/v1/ask`)
++ frontend v1. Golden ~87.5% (ver `docs/HISTORY.md`).

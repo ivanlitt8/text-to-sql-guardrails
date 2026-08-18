@@ -13,8 +13,30 @@ completo (4 tablas) es chico y entra sin problema en el contexto.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 import duckdb
+
+
+@dataclass(frozen=True)
+class IntrospectedForeignKey:
+    table: str
+    column: str
+
+
+@dataclass(frozen=True)
+class IntrospectedColumn:
+    name: str
+    data_type: str
+    nullable: bool
+    is_primary_key: bool
+    foreign_key: IntrospectedForeignKey | None = None
+
+
+@dataclass(frozen=True)
+class IntrospectedTable:
+    name: str
+    columns: list[IntrospectedColumn]
 
 
 def extract_schema(con: duckdb.DuckDBPyConnection) -> str:
@@ -34,6 +56,52 @@ def extract_schema(con: duckdb.DuckDBPyConnection) -> str:
         statements.append(_build_create_table(table_name, columns, constraints))
 
     return "\n\n".join(statements)
+
+
+def introspect_schema(con: duckdb.DuckDBPyConnection) -> list[IntrospectedTable]:
+    """
+    Introspecciona DuckDB y devuelve tablas/columnas/PK/FK estructurados.
+    Misma fuente que extract_schema(); el catálogo HTTP lo consume tal cual.
+    """
+    tables = _list_tables(con)
+    columns_by_table = _load_columns(con)
+    constraints_by_table = _load_constraints(con)
+
+    result: list[IntrospectedTable] = []
+    for table_name in tables:
+        columns = columns_by_table.get(table_name, [])
+        constraints = constraints_by_table.get(table_name, [])
+        pk_columns = _single_column_names(
+            [
+                cols
+                for ctype, _text, cols, _ref_table, _ref_cols in constraints
+                if ctype == "PRIMARY KEY"
+            ]
+        )
+        fk_by_column = _inline_foreign_keys(constraints)
+        result.append(
+            IntrospectedTable(
+                name=table_name,
+                columns=[
+                    IntrospectedColumn(
+                        name=column_name,
+                        data_type=data_type,
+                        nullable=is_nullable,
+                        is_primary_key=column_name in pk_columns,
+                        foreign_key=(
+                            IntrospectedForeignKey(
+                                table=fk_by_column[column_name][0],
+                                column=fk_by_column[column_name][1],
+                            )
+                            if column_name in fk_by_column
+                            else None
+                        ),
+                    )
+                    for column_name, data_type, is_nullable in columns
+                ],
+            )
+        )
+    return result
 
 
 def _list_tables(con: duckdb.DuckDBPyConnection) -> list[str]:

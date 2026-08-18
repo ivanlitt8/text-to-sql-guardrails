@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from schema_extractor import extract_schema  # noqa: E402
+from schema_extractor import extract_schema, introspect_schema  # noqa: E402
 
 
 @pytest.fixture
@@ -52,3 +52,35 @@ def test_extract_schema_no_lee_archivo_estatico(con):
     ddl = extract_schema(con)
     assert "notas" in ddl
     assert "CREATE TABLE vuelos" in ddl
+
+
+def test_introspect_schema_tablas_pk_y_fk(con):
+    tables = {table.name: table for table in introspect_schema(con)}
+
+    assert set(tables) == {
+        "aerolineas",
+        "ciudades",
+        "vuelos",
+        "pasajeros",
+        "reservas",
+    }
+
+    ciudades_ciudad = next(c for c in tables["ciudades"].columns if c.name == "ciudad")
+    assert ciudades_ciudad.is_primary_key is True
+    assert ciudades_ciudad.foreign_key is None
+
+    aerolinea_id = next(c for c in tables["vuelos"].columns if c.name == "aerolinea_id")
+    assert aerolinea_id.foreign_key is not None
+    assert aerolinea_id.foreign_key.table == "aerolineas"
+    assert aerolinea_id.foreign_key.column == "id"
+
+    origen = next(c for c in tables["vuelos"].columns if c.name == "origen")
+    assert origen.foreign_key is None
+    assert origen.is_primary_key is False
+
+
+def test_introspect_schema_incluye_columna_nueva(con):
+    con.execute("ALTER TABLE vuelos ADD COLUMN notas VARCHAR")
+    tables = {table.name: table for table in introspect_schema(con)}
+    names = [column.name for column in tables["vuelos"].columns]
+    assert "notas" in names

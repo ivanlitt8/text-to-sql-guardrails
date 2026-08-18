@@ -9,3 +9,6 @@ venv/
 .cursor/
 docs/HISTORY.md
 docs/SPECS.md
+node_modules/
+frontend/dist/
+frontend/.env

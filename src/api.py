@@ -13,21 +13,47 @@ from typing import Any
 import ollama
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from executor import open_connection_for_schema
 from pipeline import FinalResponse, run_pipeline
+from schema_catalog import SchemaResponse, SchemaUnavailableError, load_schema_catalog
 
 load_dotenv()
+
+_DEFAULT_FRONTEND_ORIGINS = [
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+
+
+def parse_frontend_origins(raw: str | None = None) -> list[str]:
+    """Orígenes CORS. FRONTEND_ORIGIN admite una lista separada por comas."""
+    value = raw if raw is not None else os.getenv("FRONTEND_ORIGIN")
+    if value is None or not value.strip():
+        return list(_DEFAULT_FRONTEND_ORIGINS)
+    origins = [part.strip() for part in value.split(",") if part.strip()]
+    return origins or list(_DEFAULT_FRONTEND_ORIGINS)
+
 
 app = FastAPI(
     title="Text-to-SQL Vuelos",
     version="0.2.0",
     description=(
         "Pregunta libre en lenguaje natural → SQL + guardrails + juez. "
+        "GET /v1/schema expone el catálogo para el frontend. "
         "La salida de POST /v1/ask es FinalResponse."
     ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=parse_frontend_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -148,6 +174,15 @@ def ready() -> JSONResponse:
     payload = check_readiness()
     status_code = 200 if payload.ready else 503
     return JSONResponse(status_code=status_code, content=payload.model_dump())
+
+
+@app.get("/v1/schema", response_model=SchemaResponse)
+def schema() -> SchemaResponse | JSONResponse:
+    """Catálogo para el frontend: introspección DuckDB + hints semánticos."""
+    try:
+        return load_schema_catalog()
+    except SchemaUnavailableError as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.post("/v1/ask", response_model=FinalResponse)

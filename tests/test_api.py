@@ -1,5 +1,5 @@
 """
-Tests de la capa HTTP (FastAPI). Mockean run_pipeline y los checks de ready.
+Tests de la capa HTTP (FastAPI). Mockean run_pipeline, ready y schema.
 No requieren Ollama.
 """
 
@@ -15,10 +15,16 @@ from fastapi.testclient import TestClient
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from api import ReadyResponse, app, check_readiness  # noqa: E402
+from api import ReadyResponse, app, check_readiness, parse_frontend_origins  # noqa: E402
 from guardrails import GuardrailResult  # noqa: E402
 from judge import JudgeVerdict  # noqa: E402
 from pipeline import FinalResponse  # noqa: E402
+from schema_catalog import (  # noqa: E402
+    SchemaHintResponse,
+    SchemaResponse,
+    SchemaTableResponse,
+    SchemaUnavailableError,
+)
 
 
 def _final_response(**overrides) -> FinalResponse:
@@ -126,6 +132,36 @@ def test_ready_ok(mock_ready, client: TestClient):
     assert response.json()["ready"] is True
 
 
+@patch("api.load_schema_catalog")
+def test_schema_ok(mock_schema, client: TestClient):
+    mock_schema.return_value = SchemaResponse(
+        tables=[
+            SchemaTableResponse(
+                name="vuelos",
+                description="Vuelos de prueba",
+                columns=[],
+            )
+        ],
+        hints=[SchemaHintResponse(title="Hint", body="JOIN ciudades")],
+        prompt_suggestions=["¿Cuántos vuelos hay con destino a …?"],
+        limitations=["No hay clima."],
+    )
+    response = client.get("/v1/schema")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tables"][0]["name"] == "vuelos"
+    assert body["prompt_suggestions"]
+    assert "clima" in body["limitations"][0]
+
+
+@patch("api.load_schema_catalog")
+def test_schema_503_si_duckdb_falla(mock_schema, client: TestClient):
+    mock_schema.side_effect = SchemaUnavailableError("IOException: corrupt")
+    response = client.get("/v1/schema")
+    assert response.status_code == 503
+    assert "corrupt" in response.json()["detail"]
+
+
 @patch("api.check_readiness")
 def test_ready_503_si_falta_algo(mock_ready, client: TestClient):
     mock_ready.return_value = ReadyResponse(
@@ -158,3 +194,47 @@ def test_check_readiness_modelos_presentes(mock_db, mock_client_cls):
     assert result.ready is True
     assert result.checks["generator_model"] is True
     assert result.checks["judge_model"] is True
+
+
+def test_parse_frontend_origins_default():
+    origins = parse_frontend_origins("")
+    assert origins == [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
+
+
+def test_parse_frontend_origins_lista_custom():
+    assert parse_frontend_origins(" http://ui.local:3000 , http://ui.local:4173 ") == [
+        "http://ui.local:3000",
+        "http://ui.local:4173",
+    ]
+
+
+def test_cors_permite_origen_del_frontend(client: TestClient):
+    origin = parse_frontend_origins()[0]
+    response = client.get("/v1/health", headers={"Origin": origin})
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_preflight_ask(client: TestClient):
+    origin = parse_frontend_origins()[0]
+    response = client.options(
+        "/v1/ask",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code in (200, 204)
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_rechaza_otro_origen(client: TestClient):
+    response = client.get(
+        "/v1/health",
+        headers={"Origin": "http://evil.example"},
+    )
+    assert response.headers.get("access-control-allow-origin") != "http://evil.example"
