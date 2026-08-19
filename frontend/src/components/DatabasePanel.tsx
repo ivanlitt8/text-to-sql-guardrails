@@ -45,7 +45,7 @@ export default function DatabasePanel({
         {schema && <SchemaDeck tables={schema.tables} />}
       </section>
 
-      {schema && schema.hints.length > 0 && (
+      {/* {schema && schema.hints.length > 0 && (
         <section className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm">
           <h2 className="text-sm font-semibold tracking-wide text-slate-500 uppercase">
             Hints
@@ -59,7 +59,7 @@ export default function DatabasePanel({
             ))}
           </ul>
         </section>
-      )}
+      )} */}
 
       {/* {schema && schema.limitations.length > 0 && (
         <section className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm">
