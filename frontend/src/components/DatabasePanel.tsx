@@ -23,8 +23,7 @@ export default function DatabasePanel({
           Base de datos
         </h2>
         <p className="mt-1 text-sm text-slate-600">
-          Cada capa del cilindro es una entidad. Al pasar el cursor se abren
-          sus keys.
+          Cada capa es una entidad del schema.
         </p>
 
         {loading && (
